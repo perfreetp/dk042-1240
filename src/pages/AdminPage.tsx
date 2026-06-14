@@ -28,6 +28,7 @@ import {
   Bell,
   CalendarCheck,
   AlertTriangle,
+  UserPlus,
 } from 'lucide-react';
 import type { AdminTab, Product, Ranking, TrialStatus, TrialFollowUp } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
@@ -144,6 +145,13 @@ export function AdminPage() {
   const [scheduleDateTime, setScheduleDateTime] = useState('');
   const [toastMessage, setToastMessage] = useState('');
   const [showToast, setShowToast] = useState(false);
+  const [rankingViewMode, setRankingViewMode] = useState<'list' | 'schedule'>('list');
+  const [trialViewMode, setTrialViewMode] = useState<'workspace' | 'list'>('workspace');
+  const [processingTrialId, setProcessingTrialId] = useState<string | null>(null);
+  const [processStatus, setProcessStatus] = useState<TrialStatus>('pending');
+  const [processOwner, setProcessOwner] = useState('');
+  const [processNextContact, setProcessNextContact] = useState('');
+  const [processNote, setProcessNote] = useState('');
 
   const tabs = [
     { key: 'dashboard', label: '数据看板', icon: BarChart3 },
@@ -166,8 +174,10 @@ export function AdminPage() {
 
   const stats7d = getRecent7DayStats();
   const trend7d = getRecent7DayTrend();
-  const todayFollowUps = getTodayFollowUps().slice(0, 5);
-  const overdueFollowUps = getOverdueFollowUps().slice(0, 5);
+  const allTodayFollowUps = getTodayFollowUps();
+  const allOverdueFollowUps = getOverdueFollowUps();
+  const todayFollowUps = allTodayFollowUps.slice(0, 5);
+  const overdueFollowUps = allOverdueFollowUps.slice(0, 5);
   const hotRankings = getPublishedRankings()
     .sort((a, b) => b.productIds.length - a.productIds.length)
     .slice(0, 5);
@@ -300,6 +310,41 @@ export function AdminPage() {
 
   const handleCancelSchedule = (rankingId: string) => {
     scheduleRankingPublish(rankingId, '');
+  };
+
+  const handleStartProcessTrial = (trialId: string) => {
+    const trial = trials.find(t => t.id === trialId);
+    if (trial) {
+      setProcessingTrialId(trialId);
+      setProcessStatus(trial.status);
+      setProcessOwner(trial.owner || '');
+      setProcessNextContact(trial.nextContactAt ? trial.nextContactAt.split('T')[0] : '');
+      setProcessNote('');
+    }
+  };
+
+  const handleSaveProcessTrial = (trialId: string) => {
+    const trial = trials.find(t => t.id === trialId);
+    if (trial) {
+      if (trial.status !== processStatus) {
+        updateTrialStatus(trialId, processStatus);
+      }
+      if (trial.owner !== processOwner) {
+        assignTrialOwner(trialId, processOwner);
+      }
+      if ((trial.nextContactAt || '') !== processNextContact) {
+        updateTrialNextContact(trialId, processNextContact || undefined);
+      }
+      if (processNote.trim()) {
+        const operator = trial.owner || '运营';
+        addTrialFollowUp(trialId, {
+          content: processNote,
+          operator,
+        });
+      }
+    }
+    setProcessingTrialId(null);
+    setProcessNote('');
   };
 
   const handleUpdateTrialStatus = (trialId: string, status: TrialStatus) => {
@@ -464,7 +509,7 @@ export function AdminPage() {
                         <h3 className="font-semibold text-slate-800">今日待跟进</h3>
                       </div>
                       <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">
-                        {todayFollowUps.length} 条
+                        {allTodayFollowUps.length} 条
                       </span>
                     </div>
                     <div className="divide-y divide-slate-100">
@@ -492,7 +537,10 @@ export function AdminPage() {
                                 </div>
                               </div>
                               <button
-                                onClick={() => setAdminTab('trials')}
+                                onClick={() => {
+                                  setAdminTab('trials');
+                                  setTrialViewMode('workspace');
+                                }}
                                 className="flex-shrink-0 px-3 py-1 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
                               >
                                 立即处理
@@ -510,7 +558,10 @@ export function AdminPage() {
                     </div>
                     <div className="p-3 border-t border-slate-100 bg-slate-50">
                       <button
-                        onClick={() => setAdminTab('trials')}
+                        onClick={() => {
+                          setAdminTab('trials');
+                          setTrialViewMode('workspace');
+                        }}
                         className="w-full text-xs text-blue-600 hover:text-blue-700 font-medium"
                       >
                         查看全部 →
@@ -525,7 +576,7 @@ export function AdminPage() {
                         <h3 className="font-semibold text-slate-800">已逾期待跟进</h3>
                       </div>
                       <span className="text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded-full">
-                        {overdueFollowUps.length} 条
+                        {allOverdueFollowUps.length} 条
                       </span>
                     </div>
                     <div className="divide-y divide-slate-100">
@@ -566,7 +617,10 @@ export function AdminPage() {
                     </div>
                     <div className="p-3 border-t border-slate-100 bg-slate-50">
                       <button
-                        onClick={() => setAdminTab('trials')}
+                        onClick={() => {
+                          setAdminTab('trials');
+                          setTrialViewMode('workspace');
+                        }}
                         className="w-full text-xs text-blue-600 hover:text-blue-700 font-medium"
                       >
                         查看全部 →
@@ -902,13 +956,38 @@ export function AdminPage() {
                   </button>
                 </div>
 
-                {rankings.length === 0 ? (
-                  <div className="text-center py-16 text-slate-500">
-                    <Trophy size={48} className="mx-auto mb-3 text-slate-300" />
-                    <p>暂无榜单，点击上方按钮新建</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-100">
+                <div className="flex items-center gap-1 p-2 border-b border-slate-100 bg-slate-50">
+                  <button
+                    onClick={() => setRankingViewMode('list')}
+                    className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
+                      rankingViewMode === 'list'
+                        ? 'bg-white text-blue-600 shadow-sm border border-slate-200'
+                        : 'text-slate-600 hover:text-slate-800'
+                    }`}
+                  >
+                    榜单管理
+                  </button>
+                  <button
+                    onClick={() => setRankingViewMode('schedule')}
+                    className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
+                      rankingViewMode === 'schedule'
+                        ? 'bg-white text-blue-600 shadow-sm border border-slate-200'
+                        : 'text-slate-600 hover:text-slate-800'
+                    }`}
+                  >
+                    发布计划
+                  </button>
+                </div>
+
+                {rankingViewMode === 'list' && (
+                  <>
+                    {rankings.length === 0 ? (
+                      <div className="text-center py-16 text-slate-500">
+                        <Trophy size={48} className="mx-auto mb-3 text-slate-300" />
+                        <p>暂无榜单，点击上方按钮新建</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100">
                     {rankings.map((ranking) => (
                       <div key={ranking.id} className="p-4 hover:bg-slate-50 transition-colors">
                         <div className="flex items-center justify-between mb-3">
@@ -1063,6 +1142,150 @@ export function AdminPage() {
                       </div>
                     ))}
                   </div>
+                    )}
+                  </>
+                )}
+
+                {rankingViewMode === 'schedule' && (
+                  <div className="p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="border border-amber-200 rounded-xl overflow-hidden bg-amber-50/30">
+                        <div className="flex items-center justify-between p-3 bg-amber-100/50 border-b border-amber-200">
+                          <div className="flex items-center gap-2">
+                            <Clock className="text-amber-600" size={18} />
+                            <h3 className="font-semibold text-amber-800 text-sm">待发布</h3>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 bg-amber-200 text-amber-700 rounded-full font-medium">
+                            {rankings.filter(r => r.status === 'draft' && r.scheduledPublishAt && new Date(r.scheduledPublishAt) > new Date()).length}
+                          </span>
+                        </div>
+                        <div className="p-3 space-y-2 max-h-[600px] overflow-y-auto">
+                          {rankings
+                            .filter(r => r.status === 'draft' && r.scheduledPublishAt && new Date(r.scheduledPublishAt) > new Date())
+                            .sort((a, b) => (a.scheduledPublishAt || '').localeCompare(b.scheduledPublishAt || ''))
+                            .map(ranking => (
+                              <div key={ranking.id} className="bg-white rounded-lg p-3 border border-amber-100 shadow-sm">
+                                <p className="font-medium text-slate-800 text-sm mb-1">{ranking.name}</p>
+                                <div className="flex items-center gap-1 mb-2">
+                                  <Clock size={12} className="text-amber-500" />
+                                  <span className="text-xs text-amber-600">
+                                    {formatScheduleDateTime(ranking.scheduledPublishAt!)}
+                                  </span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => publishRanking(ranking.id)}
+                                    className="flex-1 px-2 py-1 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium"
+                                  >
+                                    立即发布
+                                  </button>
+                                  <button
+                                    onClick={() => handleCancelSchedule(ranking.id)}
+                                    className="flex-1 px-2 py-1 text-xs bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                  >
+                                    取消定时
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          {rankings.filter(r => r.status === 'draft' && r.scheduledPublishAt && new Date(r.scheduledPublishAt) > new Date()).length === 0 && (
+                            <div className="text-center py-8 text-slate-400">
+                              <Clock size={24} className="mx-auto mb-1 text-amber-300" />
+                              <p className="text-xs">暂无待发布榜单</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="border border-red-200 rounded-xl overflow-hidden bg-red-50/30">
+                        <div className="flex items-center justify-between p-3 bg-red-100/50 border-b border-red-200">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle className="text-red-600" size={18} />
+                            <h3 className="font-semibold text-red-800 text-sm">已过期未发布</h3>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 bg-red-200 text-red-700 rounded-full font-medium">
+                            {rankings.filter(r => r.status === 'draft' && r.scheduledPublishAt && new Date(r.scheduledPublishAt) <= new Date()).length}
+                          </span>
+                        </div>
+                        <div className="p-3 space-y-2 max-h-[600px] overflow-y-auto">
+                          {rankings
+                            .filter(r => r.status === 'draft' && r.scheduledPublishAt && new Date(r.scheduledPublishAt) <= new Date())
+                            .sort((a, b) => (a.scheduledPublishAt || '').localeCompare(b.scheduledPublishAt || ''))
+                            .map(ranking => (
+                              <div key={ranking.id} className="bg-white rounded-lg p-3 border border-red-100 shadow-sm">
+                                <p className="font-medium text-slate-800 text-sm mb-1">{ranking.name}</p>
+                                <div className="flex items-center gap-1 mb-2">
+                                  <AlertTriangle size={12} className="text-red-500" />
+                                  <span className="text-xs text-red-600">
+                                    {formatScheduleDateTime(ranking.scheduledPublishAt!)}
+                                  </span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => publishRanking(ranking.id)}
+                                    className="flex-1 px-2 py-1 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium"
+                                  >
+                                    立即发布
+                                  </button>
+                                  <button
+                                    onClick={() => handleCancelSchedule(ranking.id)}
+                                    className="flex-1 px-2 py-1 text-xs bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                  >
+                                    取消定时
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          {rankings.filter(r => r.status === 'draft' && r.scheduledPublishAt && new Date(r.scheduledPublishAt) <= new Date()).length === 0 && (
+                            <div className="text-center py-8 text-slate-400">
+                              <AlertTriangle size={24} className="mx-auto mb-1 text-red-300" />
+                              <p className="text-xs">暂无过期未发布榜单</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="border border-green-200 rounded-xl overflow-hidden bg-green-50/30">
+                        <div className="flex items-center justify-between p-3 bg-green-100/50 border-b border-green-200">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="text-green-600" size={18} />
+                            <h3 className="font-semibold text-green-800 text-sm">最近发布</h3>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 bg-green-200 text-green-700 rounded-full font-medium">
+                            {getPublishedRankings().length}
+                          </span>
+                        </div>
+                        <div className="p-3 space-y-2 max-h-[600px] overflow-y-auto">
+                          {getPublishedRankings()
+                            .sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''))
+                            .slice(0, 10)
+                            .map(ranking => (
+                              <div key={ranking.id} className="bg-white rounded-lg p-3 border border-green-100 shadow-sm">
+                                <p className="font-medium text-slate-800 text-sm mb-1">{ranking.name}</p>
+                                <div className="flex items-center gap-1 mb-2">
+                                  <CheckCircle2 size={12} className="text-green-500" />
+                                  <span className="text-xs text-green-600">
+                                    {ranking.publishedAt ? formatScheduleDateTime(ranking.publishedAt) : '-'}
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={() => unpublishRanking(ranking.id)}
+                                  className="w-full px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded-md hover:bg-amber-200 transition-colors font-medium"
+                                >
+                                  撤回草稿
+                                </button>
+                              </div>
+                            ))}
+                          {getPublishedRankings().length === 0 && (
+                            <div className="text-center py-8 text-slate-400">
+                              <CheckCircle2 size={24} className="mx-auto mb-1 text-green-300" />
+                              <p className="text-xs">暂无已发布榜单</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
@@ -1139,44 +1362,477 @@ export function AdminPage() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <select
-                      value={trialFilter}
-                      onChange={(e) => setTrialFilter(e.target.value as TrialStatus | 'all')}
-                      className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
-                    >
-                      <option value="all">全部状态</option>
-                      {Object.entries(trialStatusConfig).map(([key, cfg]) => (
-                        <option key={key} value={key}>{cfg.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-medium text-slate-500 mr-1">快速筛选：</span>
-                    {[
-                      { key: 'all', label: '全部' },
-                      { key: 'today', label: '今日待联系' },
-                      { key: 'overdue', label: '已逾期' },
-                      { key: 'pending', label: '待处理' },
-                    ].map((item) => (
-                      <button
-                        key={item.key}
-                        onClick={() => setTrialQuickFilter(item.key as 'all' | 'today' | 'overdue' | 'pending')}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
-                          trialQuickFilter === item.key
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300 hover:text-blue-600'
-                        }`}
+                    {trialViewMode === 'list' && (
+                      <select
+                        value={trialFilter}
+                        onChange={(e) => setTrialFilter(e.target.value as TrialStatus | 'all')}
+                        className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                       >
-                        {item.label}
-                      </button>
-                    ))}
+                        <option value="all">全部状态</option>
+                        {Object.entries(trialStatusConfig).map(([key, cfg]) => (
+                          <option key={key} value={key}>{cfg.label}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 </div>
 
-                {sortedTrials.length === 0 ? (
+                <div className="flex items-center gap-1 p-2 border-b border-slate-100 bg-slate-50">
+                  <button
+                    onClick={() => setTrialViewMode('workspace')}
+                    className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
+                      trialViewMode === 'workspace'
+                        ? 'bg-white text-blue-600 shadow-sm border border-slate-200'
+                        : 'text-slate-600 hover:text-slate-800'
+                    }`}
+                  >
+                    工作台
+                  </button>
+                  <button
+                    onClick={() => setTrialViewMode('list')}
+                    className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
+                      trialViewMode === 'list'
+                        ? 'bg-white text-blue-600 shadow-sm border border-slate-200'
+                        : 'text-slate-600 hover:text-slate-800'
+                    }`}
+                  >
+                    全部列表
+                  </button>
+                </div>
+
+                {trialViewMode === 'workspace' && (
+                  <div className="p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="border border-blue-200 rounded-xl overflow-hidden bg-blue-50/30">
+                        <div className="flex items-center justify-between p-3 bg-blue-100/50 border-b border-blue-200">
+                          <div className="flex items-center gap-2">
+                            <CalendarCheck className="text-blue-600" size={18} />
+                            <h3 className="font-semibold text-blue-800 text-sm">今日待联系</h3>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 bg-blue-200 text-blue-700 rounded-full font-medium">
+                            {getTodayFollowUps().length}
+                          </span>
+                        </div>
+                        <div className="p-3 space-y-2 max-h-[600px] overflow-y-auto">
+                          {getTodayFollowUps().map(trial => {
+                            const product = getProductById(trial.productId);
+                            const statusCfg = trialStatusConfig[trial.status];
+                            const isProcessing = processingTrialId === trial.id;
+
+                            return (
+                              <div key={trial.id} className="bg-white rounded-lg border border-blue-100 shadow-sm overflow-hidden">
+                                <div className="p-3">
+                                  <div className="flex items-start gap-2 mb-2">
+                                    {product && (
+                                      <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center text-base flex-shrink-0">
+                                        {product.logo}
+                                      </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                      <p className="font-medium text-slate-800 text-sm truncate">
+                                        {product?.name || '未知产品'}
+                                      </p>
+                                      <p className="text-xs text-slate-500 truncate">
+                                        {trial.contactName} · {trial.companyName}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                                    <span className={`text-xs px-1.5 py-0.5 rounded ${statusCfg.color}`}>
+                                      {statusCfg.label}
+                                    </span>
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                                      {trial.owner || '未分配'}
+                                    </span>
+                                  </div>
+                                  {trial.nextContactAt && (
+                                    <div className="flex items-center gap-1 mb-2">
+                                      <Clock size={12} className="text-blue-500" />
+                                      <span className="text-xs text-blue-600">
+                                        {trial.nextContactAt.split('T')[1]?.substring(0, 5) || '全天'}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {!isProcessing && (
+                                    <button
+                                      onClick={() => handleStartProcessTrial(trial.id)}
+                                      className="w-full px-2 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-medium"
+                                    >
+                                      处理
+                                    </button>
+                                  )}
+                                </div>
+                                {isProcessing && (
+                                  <div className="p-3 border-t border-slate-100 bg-slate-50 space-y-2">
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">状态</label>
+                                      <select
+                                        value={processStatus}
+                                        onChange={(e) => setProcessStatus(e.target.value as TrialStatus)}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                      >
+                                        {Object.entries(trialStatusConfig).map(([key, cfg]) => (
+                                          <option key={key} value={key}>{cfg.label}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">负责人</label>
+                                      <select
+                                        value={processOwner}
+                                        onChange={(e) => setProcessOwner(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                      >
+                                        <option value="">未分配</option>
+                                        {ownerOptions.map(name => (
+                                          <option key={name} value={name}>{name}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">下次联系日期</label>
+                                      <input
+                                        type="date"
+                                        value={processNextContact}
+                                        onChange={(e) => setProcessNextContact(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">跟进备注</label>
+                                      <textarea
+                                        value={processNote}
+                                        onChange={(e) => setProcessNote(e.target.value)}
+                                        placeholder="输入跟进内容..."
+                                        rows={2}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 resize-none"
+                                      />
+                                    </div>
+                                    <div className="flex gap-2 pt-1">
+                                      <button
+                                        onClick={() => setProcessingTrialId(null)}
+                                        className="flex-1 px-2 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                      >
+                                        取消
+                                      </button>
+                                      <button
+                                        onClick={() => handleSaveProcessTrial(trial.id)}
+                                        className="flex-1 px-2 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-medium"
+                                      >
+                                        保存
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {getTodayFollowUps().length === 0 && (
+                            <div className="text-center py-8 text-slate-400">
+                              <CalendarCheck size={24} className="mx-auto mb-1 text-blue-300" />
+                              <p className="text-xs">今日暂无待联系</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="border border-red-200 rounded-xl overflow-hidden bg-red-50/30">
+                        <div className="flex items-center justify-between p-3 bg-red-100/50 border-b border-red-200">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle className="text-red-600" size={18} />
+                            <h3 className="font-semibold text-red-800 text-sm">已逾期</h3>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 bg-red-200 text-red-700 rounded-full font-medium">
+                            {getOverdueFollowUps().length}
+                          </span>
+                        </div>
+                        <div className="p-3 space-y-2 max-h-[600px] overflow-y-auto">
+                          {getOverdueFollowUps().map(trial => {
+                            const product = getProductById(trial.productId);
+                            const statusCfg = trialStatusConfig[trial.status];
+                            const isProcessing = processingTrialId === trial.id;
+
+                            return (
+                              <div key={trial.id} className="bg-white rounded-lg border border-red-100 shadow-sm overflow-hidden">
+                                <div className="p-3">
+                                  <div className="flex items-start gap-2 mb-2">
+                                    {product && (
+                                      <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center text-base flex-shrink-0">
+                                        {product.logo}
+                                      </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                      <p className="font-medium text-slate-800 text-sm truncate">
+                                        {product?.name || '未知产品'}
+                                      </p>
+                                      <p className="text-xs text-slate-500 truncate">
+                                        {trial.contactName} · {trial.companyName}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                                    <span className={`text-xs px-1.5 py-0.5 rounded ${statusCfg.color}`}>
+                                      {statusCfg.label}
+                                    </span>
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                                      {trial.owner || '未分配'}
+                                    </span>
+                                  </div>
+                                  {trial.nextContactAt && (
+                                    <div className="flex items-center gap-1 mb-2">
+                                      <AlertTriangle size={12} className="text-red-500" />
+                                      <span className="text-xs text-red-600">
+                                        逾期 {calcDaysOverdue(trial.nextContactAt)} 天
+                                      </span>
+                                    </div>
+                                  )}
+                                  {!isProcessing && (
+                                    <button
+                                      onClick={() => handleStartProcessTrial(trial.id)}
+                                      className="w-full px-2 py-1.5 text-xs bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors font-medium"
+                                    >
+                                      处理
+                                    </button>
+                                  )}
+                                </div>
+                                {isProcessing && (
+                                  <div className="p-3 border-t border-slate-100 bg-slate-50 space-y-2">
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">状态</label>
+                                      <select
+                                        value={processStatus}
+                                        onChange={(e) => setProcessStatus(e.target.value as TrialStatus)}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                      >
+                                        {Object.entries(trialStatusConfig).map(([key, cfg]) => (
+                                          <option key={key} value={key}>{cfg.label}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">负责人</label>
+                                      <select
+                                        value={processOwner}
+                                        onChange={(e) => setProcessOwner(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                      >
+                                        <option value="">未分配</option>
+                                        {ownerOptions.map(name => (
+                                          <option key={name} value={name}>{name}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">下次联系日期</label>
+                                      <input
+                                        type="date"
+                                        value={processNextContact}
+                                        onChange={(e) => setProcessNextContact(e.target.value)}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">跟进备注</label>
+                                      <textarea
+                                        value={processNote}
+                                        onChange={(e) => setProcessNote(e.target.value)}
+                                        placeholder="输入跟进内容..."
+                                        rows={2}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 resize-none"
+                                      />
+                                    </div>
+                                    <div className="flex gap-2 pt-1">
+                                      <button
+                                        onClick={() => setProcessingTrialId(null)}
+                                        className="flex-1 px-2 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                      >
+                                        取消
+                                      </button>
+                                      <button
+                                        onClick={() => handleSaveProcessTrial(trial.id)}
+                                        className="flex-1 px-2 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-medium"
+                                      >
+                                        保存
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {getOverdueFollowUps().length === 0 && (
+                            <div className="text-center py-8 text-slate-400">
+                              <AlertTriangle size={24} className="mx-auto mb-1 text-red-300" />
+                              <p className="text-xs">暂无逾期跟进</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="border border-purple-200 rounded-xl overflow-hidden bg-purple-50/30">
+                        <div className="flex items-center justify-between p-3 bg-purple-100/50 border-b border-purple-200">
+                          <div className="flex items-center gap-2">
+                            <UserPlus className="text-purple-600" size={18} />
+                            <h3 className="font-semibold text-purple-800 text-sm">未分配负责人</h3>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 bg-purple-200 text-purple-700 rounded-full font-medium">
+                            {trials.filter(t => !t.owner && t.status !== 'completed' && t.status !== 'rejected').length}
+                          </span>
+                        </div>
+                        <div className="p-3 space-y-2 max-h-[600px] overflow-y-auto">
+                          {trials
+                            .filter(t => !t.owner && t.status !== 'completed' && t.status !== 'rejected')
+                            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+                            .map(trial => {
+                              const product = getProductById(trial.productId);
+                              const statusCfg = trialStatusConfig[trial.status];
+                              const isProcessing = processingTrialId === trial.id;
+
+                              return (
+                                <div key={trial.id} className="bg-white rounded-lg border border-purple-100 shadow-sm overflow-hidden">
+                                  <div className="p-3">
+                                    <div className="flex items-start gap-2 mb-2">
+                                      {product && (
+                                        <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center text-base flex-shrink-0">
+                                          {product.logo}
+                                        </div>
+                                      )}
+                                      <div className="flex-1 min-w-0">
+                                        <p className="font-medium text-slate-800 text-sm truncate">
+                                          {product?.name || '未知产品'}
+                                        </p>
+                                        <p className="text-xs text-slate-500 truncate">
+                                          {trial.contactName} · {trial.companyName}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                                      <span className={`text-xs px-1.5 py-0.5 rounded ${statusCfg.color}`}>
+                                        {statusCfg.label}
+                                      </span>
+                                      <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-600">
+                                        未分配
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1 mb-2">
+                                      <Clock size={12} className="text-slate-400" />
+                                      <span className="text-xs text-slate-500">
+                                        {new Date(trial.createdAt).toLocaleDateString('zh-CN')}
+                                      </span>
+                                    </div>
+                                    {!isProcessing && (
+                                      <button
+                                        onClick={() => handleStartProcessTrial(trial.id)}
+                                        className="w-full px-2 py-1.5 text-xs bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors font-medium"
+                                      >
+                                        处理
+                                      </button>
+                                    )}
+                                  </div>
+                                  {isProcessing && (
+                                    <div className="p-3 border-t border-slate-100 bg-slate-50 space-y-2">
+                                      <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">状态</label>
+                                        <select
+                                          value={processStatus}
+                                          onChange={(e) => setProcessStatus(e.target.value as TrialStatus)}
+                                          className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                        >
+                                          {Object.entries(trialStatusConfig).map(([key, cfg]) => (
+                                            <option key={key} value={key}>{cfg.label}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                      <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">负责人</label>
+                                        <select
+                                          value={processOwner}
+                                          onChange={(e) => setProcessOwner(e.target.value)}
+                                          className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                        >
+                                          <option value="">未分配</option>
+                                          {ownerOptions.map(name => (
+                                            <option key={name} value={name}>{name}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                      <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">下次联系日期</label>
+                                        <input
+                                          type="date"
+                                          value={processNextContact}
+                                          onChange={(e) => setProcessNextContact(e.target.value)}
+                                          className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">跟进备注</label>
+                                        <textarea
+                                          value={processNote}
+                                          onChange={(e) => setProcessNote(e.target.value)}
+                                          placeholder="输入跟进内容..."
+                                          rows={2}
+                                          className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 resize-none"
+                                        />
+                                      </div>
+                                      <div className="flex gap-2 pt-1">
+                                        <button
+                                          onClick={() => setProcessingTrialId(null)}
+                                          className="flex-1 px-2 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                        >
+                                          取消
+                                        </button>
+                                        <button
+                                          onClick={() => handleSaveProcessTrial(trial.id)}
+                                          className="flex-1 px-2 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-medium"
+                                        >
+                                          保存
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          {trials.filter(t => !t.owner && t.status !== 'completed' && t.status !== 'rejected').length === 0 && (
+                            <div className="text-center py-8 text-slate-400">
+                              <UserPlus size={24} className="mx-auto mb-1 text-purple-300" />
+                              <p className="text-xs">暂无未分配试用</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {trialViewMode === 'list' && (
+                  <>
+                    <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-medium text-slate-500 mr-1">快速筛选：</span>
+                        {[
+                          { key: 'all', label: '全部' },
+                          { key: 'today', label: '今日待联系' },
+                          { key: 'overdue', label: '已逾期' },
+                          { key: 'pending', label: '待处理' },
+                        ].map((item) => (
+                          <button
+                            key={item.key}
+                            onClick={() => setTrialQuickFilter(item.key as 'all' | 'today' | 'overdue' | 'pending')}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
+                              trialQuickFilter === item.key
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300 hover:text-blue-600'
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {sortedTrials.length === 0 ? (
                   <div className="text-center py-16 text-slate-500">
                     <FlaskConical size={48} className="mx-auto mb-3 text-slate-300" />
                     <p>暂无试用申请</p>
@@ -1420,6 +2076,8 @@ export function AdminPage() {
                       );
                     })}
                   </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>

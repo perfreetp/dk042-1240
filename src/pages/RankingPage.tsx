@@ -1,14 +1,42 @@
-import { useState } from 'react';
-import { Trophy, TrendingUp, Sparkles, Star, ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Trophy, TrendingUp, Sparkles, Star, ArrowUp, ArrowDown, Minus, RefreshCw } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Rating } from '@/components/Rating';
 import { categoryLabels, formatPrice } from '@/utils/constants';
 import type { Ranking as RankingType } from '@/types';
 
 export function RankingPage() {
-  const { getPublishedRankings, getProductById, setSelectedProduct, setShowProductDetail } = useAppStore();
+  const { getPublishedRankings, getProductById, setSelectedProduct, setShowProductDetail, checkScheduledRankings } = useAppStore();
   const rankings = getPublishedRankings();
   const [activeRanking, setActiveRanking] = useState<RankingType | undefined>(rankings[0]);
+  const [showUpdateToast, setShowUpdateToast] = useState(false);
+
+  useEffect(() => {
+    const doCheck = () => {
+      const published = checkScheduledRankings();
+      if (published.length > 0) {
+        const updatedRankings = getPublishedRankings();
+        if (activeRanking) {
+          const current = updatedRankings.find(r => r.id === activeRanking.id);
+          if (current) {
+            setActiveRanking(current);
+          } else if (updatedRankings.length > 0) {
+            setActiveRanking(updatedRankings[0]);
+          }
+        } else if (updatedRankings.length > 0) {
+          setActiveRanking(updatedRankings[0]);
+        }
+        setShowUpdateToast(true);
+        setTimeout(() => setShowUpdateToast(false), 3000);
+      }
+    };
+
+    doCheck();
+
+    const interval = setInterval(doCheck, 60000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const handleViewProduct = (productId: string) => {
     setSelectedProduct(productId);
@@ -79,7 +107,16 @@ export function RankingPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative">
+      <div
+        className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-2.5 bg-green-500 text-white rounded-lg shadow-lg transition-all duration-300 ${
+          showUpdateToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'
+        }`}
+      >
+        <RefreshCw size={16} className="animate-spin" />
+        <span className="text-sm font-medium">已自动更新</span>
+      </div>
+
       <div className="text-center mb-10">
         <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-amber-50 text-amber-700 rounded-full text-sm font-medium mb-4">
           <Trophy size={16} />
