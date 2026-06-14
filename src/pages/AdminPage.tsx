@@ -24,6 +24,10 @@ import {
   User,
   PlusCircle,
   History,
+  Clock,
+  Bell,
+  CalendarCheck,
+  AlertTriangle,
 } from 'lucide-react';
 import type { AdminTab, Product, Ranking, TrialStatus, TrialFollowUp } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
@@ -60,6 +64,27 @@ const followUpResultColors: Record<NonNullable<TrialFollowUp['result']>, string>
 
 const ownerOptions = ['张小明', '李小红', '王大伟', '赵美丽'];
 
+const formatScheduleDateTime = (isoString: string): string => {
+  const date = new Date(isoString);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+};
+
+const toDatetimeLocalValue = (isoString?: string): string => {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
 export function AdminPage() {
   const {
     products,
@@ -86,7 +111,15 @@ export function AdminPage() {
     publishRanking,
     unpublishRanking,
     reorderRankingProducts,
+    scheduleRankingPublish,
+    checkScheduledRankings,
     detectDuplicates,
+    getTodayFollowUps,
+    getOverdueFollowUps,
+    getRecent7DayStats,
+    getRecent7DayTrend,
+    getPublishedRankings,
+    getProductById,
   } = useAppStore();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -100,12 +133,17 @@ export function AdminPage() {
   const [editingRanking, setEditingRanking] = useState<Ranking | null>(null);
   const [deletingRankingId, setDeletingRankingId] = useState<string | null>(null);
   const [trialFilter, setTrialFilter] = useState<TrialStatus | 'all'>('all');
+  const [trialQuickFilter, setTrialQuickFilter] = useState<'all' | 'today' | 'overdue' | 'pending'>('all');
   const [adminNoteTrialId, setAdminNoteTrialId] = useState<string | null>(null);
   const [adminNoteText, setAdminNoteText] = useState('');
   const [expandedTrialIds, setExpandedTrialIds] = useState<Set<string>>(new Set());
   const [followUpFormTrialId, setFollowUpFormTrialId] = useState<string | null>(null);
   const [followUpContent, setFollowUpContent] = useState('');
   const [followUpResult, setFollowUpResult] = useState<NonNullable<TrialFollowUp['result']>>('contacted');
+  const [schedulingRankingId, setSchedulingRankingId] = useState<string | null>(null);
+  const [scheduleDateTime, setScheduleDateTime] = useState('');
+  const [toastMessage, setToastMessage] = useState('');
+  const [showToast, setShowToast] = useState(false);
 
   const tabs = [
     { key: 'dashboard', label: '数据看板', icon: BarChart3 },
@@ -126,20 +164,37 @@ export function AdminPage() {
 
   const duplicateGroups = detectDuplicates();
 
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const recentTrialsCount = trials.filter(t => t.createdAt >= sevenDaysAgo).length;
-  const pendingReviewsCount = pendingReviews.length;
-  const favoritesCount = favorites.length;
-  const publishedRankingsCount = rankings.filter(r => r.status === 'published').length;
-
-  const latestTrials = [...trials]
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 5);
-
-  const hotRankings = rankings
-    .filter(r => r.status === 'published')
+  const stats7d = getRecent7DayStats();
+  const trend7d = getRecent7DayTrend();
+  const todayFollowUps = getTodayFollowUps().slice(0, 5);
+  const overdueFollowUps = getOverdueFollowUps().slice(0, 5);
+  const hotRankings = getPublishedRankings()
     .sort((a, b) => b.productIds.length - a.productIds.length)
     .slice(0, 5);
+
+  const calcDaysOverdue = (dateStr: string | undefined): number => {
+    if (!dateStr) return 0;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const d = new Date(dateStr);
+    d.setHours(0, 0, 0, 0);
+    return Math.floor((today.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+  };
+
+  const Sparkline = ({ data, color }: { data: number[]; color: string }) => {
+    const max = Math.max(...data, 1);
+    return (
+      <div className="flex items-end gap-0.5 h-8">
+        {data.map((v, i) => (
+          <div
+            key={i}
+            className={`w-1.5 rounded-sm ${color}`}
+            style={{ height: `${(v / max) * 100}%`, minHeight: '2px' }}
+          />
+        ))}
+      </div>
+    );
+  };
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -219,6 +274,34 @@ export function AdminPage() {
     reorderRankingProducts(ranking.id, newIds);
   };
 
+  const showToastMessage = (message: string) => {
+    setToastMessage(message);
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 3000);
+  };
+
+  const handleCheckScheduledRankings = () => {
+    const publishedIds = checkScheduledRankings();
+    if (publishedIds.length > 0) {
+      showToastMessage(`已发布 ${publishedIds.length} 个榜单`);
+    } else {
+      showToastMessage('没有待发布的榜单');
+    }
+  };
+
+  const handleSetSchedule = (rankingId: string) => {
+    if (scheduleDateTime) {
+      const isoString = new Date(scheduleDateTime).toISOString();
+      scheduleRankingPublish(rankingId, isoString);
+      setSchedulingRankingId(null);
+      setScheduleDateTime('');
+    }
+  };
+
+  const handleCancelSchedule = (rankingId: string) => {
+    scheduleRankingPublish(rankingId, '');
+  };
+
   const handleUpdateTrialStatus = (trialId: string, status: TrialStatus) => {
     const note = adminNoteTrialId === trialId ? adminNoteText : undefined;
     updateTrialStatus(trialId, status, note);
@@ -250,48 +333,38 @@ export function AdminPage() {
     setFollowUpFormTrialId(null);
   };
 
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const isToday = (dateStr: string | undefined) => {
+    if (!dateStr) return false;
+    return dateStr.split('T')[0] === todayStr;
+  };
+
+  const isOverdue = (dateStr: string | undefined) => {
+    if (!dateStr) return false;
+    return dateStr.split('T')[0] < todayStr;
+  };
+
+  const quickFilteredTrials = (() => {
+    switch (trialQuickFilter) {
+      case 'today':
+        return trials.filter(t => isToday(t.nextContactAt));
+      case 'overdue':
+        return trials.filter(t => isOverdue(t.nextContactAt));
+      case 'pending':
+        return trials.filter(t => t.status === 'pending');
+      default:
+        return trials;
+    }
+  })();
+
   const filteredTrials = trialFilter === 'all'
-    ? trials
-    : trials.filter(t => t.status === trialFilter);
+    ? quickFilteredTrials
+    : quickFilteredTrials.filter(t => t.status === trialFilter);
 
   const sortedTrials = [...filteredTrials].sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt)
   );
-
-  const metricCards = [
-    {
-      label: '近7日新增试用',
-      value: recentTrialsCount,
-      icon: FlaskConical,
-      bg: 'bg-blue-50',
-      iconBg: 'bg-blue-500',
-      text: 'text-blue-600',
-    },
-    {
-      label: '待审核评价',
-      value: pendingReviewsCount,
-      icon: MessageSquare,
-      bg: 'bg-orange-50',
-      iconBg: 'bg-orange-500',
-      text: 'text-orange-600',
-    },
-    {
-      label: '收藏总数',
-      value: favoritesCount,
-      icon: Heart,
-      bg: 'bg-red-50',
-      iconBg: 'bg-red-500',
-      text: 'text-red-600',
-    },
-    {
-      label: '已发布榜单',
-      value: publishedRankingsCount,
-      icon: Trophy,
-      bg: 'bg-purple-50',
-      iconBg: 'bg-purple-500',
-      text: 'text-purple-600',
-    },
-  ];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -328,81 +401,188 @@ export function AdminPage() {
         <div className="flex-1 min-w-0">
           {adminTab === 'dashboard' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {metricCards.map((card) => (
-                  <div key={card.label} className={`${card.bg} rounded-xl p-5 border border-slate-100`}>
-                    <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-slate-800 mb-3">运营概览</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-5 text-white shadow-lg shadow-blue-500/20">
+                    <div className="flex items-start justify-between mb-3">
                       <div>
-                        <p className="text-sm text-slate-600 mb-1">{card.label}</p>
-                        <p className={`text-3xl font-bold ${card.text}`}>{card.value}</p>
+                        <p className="text-sm text-blue-100 mb-1">近7日新增试用</p>
+                        <p className="text-3xl font-bold">{stats7d.trials}</p>
                       </div>
-                      <div className={`${card.iconBg} w-10 h-10 rounded-lg flex items-center justify-center text-white`}>
-                        <card.icon size={20} />
+                      <div className="w-10 h-10 rounded-lg bg-white/20 flex items-center justify-center">
+                        <FlaskConical size={20} />
                       </div>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-blue-100">趋势</span>
+                      <Sparkline data={trend7d.map(t => t.trials)} color="bg-white/70" />
+                    </div>
                   </div>
-                ))}
+
+                  <div className="bg-gradient-to-br from-red-500 to-rose-600 rounded-xl p-5 text-white shadow-lg shadow-red-500/20">
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <p className="text-sm text-red-100 mb-1">近7日新增收藏</p>
+                        <p className="text-3xl font-bold">{stats7d.favorites}</p>
+                      </div>
+                      <div className="w-10 h-10 rounded-lg bg-white/20 flex items-center justify-center">
+                        <Heart size={20} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-red-100">趋势</span>
+                      <Sparkline data={trend7d.map(t => t.favorites)} color="bg-white/70" />
+                    </div>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-xl p-5 text-white shadow-lg shadow-orange-500/20">
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <p className="text-sm text-orange-100 mb-1">近7日新增评价</p>
+                        <p className="text-3xl font-bold">{stats7d.reviews}</p>
+                      </div>
+                      <div className="w-10 h-10 rounded-lg bg-white/20 flex items-center justify-center">
+                        <MessageSquare size={20} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-orange-100">趋势</span>
+                      <Sparkline data={trend7d.map(t => t.reviews)} color="bg-white/70" />
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                  <div className="flex items-center justify-between p-4 border-b border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <FlaskConical className="text-blue-500" size={18} />
-                      <h2 className="font-semibold text-slate-800">最新试用申请</h2>
+              <div>
+                <h2 className="text-base font-semibold text-slate-800 mb-3">跟进提醒</h2>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-blue-50/50">
+                      <div className="flex items-center gap-2">
+                        <CalendarCheck className="text-blue-500" size={18} />
+                        <h3 className="font-semibold text-slate-800">今日待跟进</h3>
+                      </div>
+                      <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">
+                        {todayFollowUps.length} 条
+                      </span>
                     </div>
-                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">
-                      {latestTrials.length} 条
-                    </span>
-                  </div>
-                  <div className="divide-y divide-slate-100">
-                    {latestTrials.map((trial) => {
-                      const product = products.find(p => p.id === trial.productId);
-                      const statusCfg = trialStatusConfig[trial.status];
-                      return (
-                        <div key={trial.id} className="p-4 hover:bg-slate-50 transition-colors">
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-center gap-3 min-w-0">
-                              {product && (
-                                <div className="w-9 h-9 bg-slate-100 rounded-lg flex items-center justify-center text-lg flex-shrink-0">
-                                  {product.logo}
+                    <div className="divide-y divide-slate-100">
+                      {todayFollowUps.map((trial) => {
+                        const product = getProductById(trial.productId);
+                        return (
+                          <div key={trial.id} className="p-4 hover:bg-slate-50 transition-colors">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                {product && (
+                                  <div className="w-9 h-9 bg-slate-100 rounded-lg flex items-center justify-center text-lg flex-shrink-0">
+                                    {product.logo}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-800 text-sm truncate">
+                                    {product?.name || '未知产品'}
+                                  </p>
+                                  <p className="text-xs text-slate-500 mt-0.5 truncate">
+                                    {trial.contactName} · {trial.companyName}
+                                  </p>
+                                  <p className="text-xs text-blue-500 mt-0.5">
+                                    {trial.nextContactAt?.split('T')[1]?.substring(0, 5) || '全天'}
+                                  </p>
                                 </div>
-                              )}
-                              <div className="min-w-0">
-                                <p className="font-medium text-slate-800 text-sm truncate">
-                                  {product?.name || '未知产品'}
-                                </p>
-                                <p className="text-xs text-slate-500 mt-0.5 truncate">
-                                  {trial.contactName} · {trial.companyName}
-                                </p>
                               </div>
+                              <button
+                                onClick={() => setAdminTab('trials')}
+                                className="flex-shrink-0 px-3 py-1 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                              >
+                                立即处理
+                              </button>
                             </div>
-                            <div className="flex flex-col items-end gap-1 flex-shrink-0 ml-2">
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${statusCfg.color}`}>
-                                {statusCfg.label}
-                              </span>
-                              <span className="text-xs text-slate-400">
-                                {new Date(trial.createdAt).toLocaleDateString('zh-CN')}
+                          </div>
+                        );
+                      })}
+                      {todayFollowUps.length === 0 && (
+                        <div className="text-center py-10 text-slate-500">
+                          <CalendarCheck size={32} className="mx-auto mb-2 text-slate-300" />
+                          <p className="text-sm">今日暂无待跟进</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-3 border-t border-slate-100 bg-slate-50">
+                      <button
+                        onClick={() => setAdminTab('trials')}
+                        className="w-full text-xs text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        查看全部 →
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-red-50/50">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="text-red-500" size={18} />
+                        <h3 className="font-semibold text-slate-800">已逾期待跟进</h3>
+                      </div>
+                      <span className="text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded-full">
+                        {overdueFollowUps.length} 条
+                      </span>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                      {overdueFollowUps.map((trial) => {
+                        const product = getProductById(trial.productId);
+                        const daysOverdue = calcDaysOverdue(trial.nextContactAt);
+                        return (
+                          <div key={trial.id} className="p-4 hover:bg-slate-50 transition-colors">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                {product && (
+                                  <div className="w-9 h-9 bg-slate-100 rounded-lg flex items-center justify-center text-lg flex-shrink-0">
+                                    {product.logo}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-800 text-sm truncate">
+                                    {product?.name || '未知产品'}
+                                  </p>
+                                  <p className="text-xs text-slate-500 mt-0.5 truncate">
+                                    {trial.contactName} · {trial.companyName}
+                                  </p>
+                                </div>
+                              </div>
+                              <span className="flex-shrink-0 text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded-full font-medium">
+                                逾期 {daysOverdue} 天
                               </span>
                             </div>
                           </div>
+                        );
+                      })}
+                      {overdueFollowUps.length === 0 && (
+                        <div className="text-center py-10 text-slate-500">
+                          <AlertTriangle size={32} className="mx-auto mb-2 text-slate-300" />
+                          <p className="text-sm">暂无逾期跟进</p>
                         </div>
-                      );
-                    })}
-                    {latestTrials.length === 0 && (
-                      <div className="text-center py-12 text-slate-500">
-                        <FlaskConical size={36} className="mx-auto mb-2 text-slate-300" />
-                        <p className="text-sm">暂无试用申请</p>
-                      </div>
-                    )}
+                      )}
+                    </div>
+                    <div className="p-3 border-t border-slate-100 bg-slate-50">
+                      <button
+                        onClick={() => setAdminTab('trials')}
+                        className="w-full text-xs text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        查看全部 →
+                      </button>
+                    </div>
                   </div>
                 </div>
+              </div>
 
+              <div>
+                <h2 className="text-base font-semibold text-slate-800 mb-3">热门榜单</h2>
                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                   <div className="flex items-center justify-between p-4 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <Trophy className="text-purple-500" size={18} />
-                      <h2 className="font-semibold text-slate-800">热门榜单</h2>
+                      <h3 className="font-semibold text-slate-800">已发布榜单 TOP5</h3>
                     </div>
                     <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full">
                       {hotRankings.length} 个
@@ -703,7 +883,16 @@ export function AdminPage() {
             <div className="space-y-4">
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="flex items-center justify-between p-4 border-b border-slate-100">
-                  <h2 className="font-semibold text-slate-800">榜单管理</h2>
+                  <div className="flex items-center gap-3">
+                    <h2 className="font-semibold text-slate-800">榜单管理</h2>
+                    <button
+                      onClick={handleCheckScheduledRankings}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 text-xs font-medium rounded-lg hover:bg-amber-100 transition-colors border border-amber-200"
+                    >
+                      <Bell size={14} />
+                      自动检查已到点榜单
+                    </button>
+                  </div>
                   <button
                     onClick={handleAddRanking}
                     className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
@@ -774,6 +963,63 @@ export function AdminPage() {
                             </button>
                           </div>
                         </div>
+
+                        {ranking.status === 'draft' && (
+                          <div className="mb-3">
+                            {ranking.scheduledPublishAt ? (
+                              <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-md">
+                                  <Clock size={12} className="text-amber-600" />
+                                  <span className="text-xs text-amber-700 font-medium">
+                                    定时发布：{formatScheduleDateTime(ranking.scheduledPublishAt)}
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={() => handleCancelSchedule(ranking.id)}
+                                  className="px-2 py-1 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                >
+                                  取消定时
+                                </button>
+                              </div>
+                            ) : schedulingRankingId === ranking.id ? (
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="datetime-local"
+                                  value={scheduleDateTime}
+                                  onChange={(e) => setScheduleDateTime(e.target.value)}
+                                  className="px-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                                />
+                                <button
+                                  onClick={() => handleSetSchedule(ranking.id)}
+                                  disabled={!scheduleDateTime}
+                                  className="px-2.5 py-1 text-xs bg-amber-600 text-white rounded-md hover:bg-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  确定
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSchedulingRankingId(null);
+                                    setScheduleDateTime('');
+                                  }}
+                                  className="px-2.5 py-1 text-xs bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setSchedulingRankingId(ranking.id);
+                                  setScheduleDateTime('');
+                                }}
+                                className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-md transition-colors border border-amber-200"
+                              >
+                                <Clock size={12} />
+                                设置定时
+                              </button>
+                            )}
+                          </div>
+                        )}
 
                         {ranking.productIds.length > 0 && (
                           <div className="mt-3 space-y-1">
@@ -903,6 +1149,30 @@ export function AdminPage() {
                         <option key={key} value={key}>{cfg.label}</option>
                       ))}
                     </select>
+                  </div>
+                </div>
+
+                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-medium text-slate-500 mr-1">快速筛选：</span>
+                    {[
+                      { key: 'all', label: '全部' },
+                      { key: 'today', label: '今日待联系' },
+                      { key: 'overdue', label: '已逾期' },
+                      { key: 'pending', label: '待处理' },
+                    ].map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => setTrialQuickFilter(item.key as 'all' | 'today' | 'overdue' | 'pending')}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
+                          trialQuickFilter === item.key
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300 hover:text-blue-600'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -1210,6 +1480,15 @@ export function AdminPage() {
           </div>
         </div>
       )}
+
+      {showToast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-bounce">
+          <div className="flex items-center gap-2 px-4 py-3 bg-slate-800 text-white rounded-xl shadow-lg">
+            <CheckCircle2 size={18} className="text-green-400" />
+            <span className="text-sm font-medium">{toastMessage}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1374,6 +1653,7 @@ function RankingFormModal({ ranking, onClose, onSave }: RankingFormModalProps) {
     type: ranking?.type || 'rating' as const,
     productIds: ranking?.productIds || [] as string[],
     status: ranking?.status || 'draft',
+    scheduledPublishAt: ranking?.scheduledPublishAt || '',
   });
 
   const [productSearch, setProductSearch] = useState('');
@@ -1399,6 +1679,7 @@ function RankingFormModal({ ranking, onClose, onSave }: RankingFormModalProps) {
       type: formData.type,
       productIds: formData.productIds,
       status: formData.status,
+      scheduledPublishAt: formData.scheduledPublishAt || undefined,
     });
   };
 
@@ -1451,6 +1732,39 @@ function RankingFormModal({ ranking, onClose, onSave }: RankingFormModalProps) {
               </select>
             </div>
           </div>
+
+          {formData.status === 'draft' && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                定时发布 <span className="text-slate-400 font-normal">（可选）</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <Clock size={16} className="text-slate-400" />
+                <input
+                  type="datetime-local"
+                  value={formData.scheduledPublishAt ? toDatetimeLocalValue(formData.scheduledPublishAt) : ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFormData(prev => ({
+                      ...prev,
+                      scheduledPublishAt: val ? new Date(val).toISOString() : '',
+                    }));
+                  }}
+                  className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                />
+                {formData.scheduledPublishAt && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, scheduledPublishAt: '' }))}
+                    className="px-2.5 py-2 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 mt-1">设置后，榜单将在指定时间自动发布</p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">

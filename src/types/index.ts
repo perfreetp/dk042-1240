@@ -65,6 +65,7 @@ export interface Ranking {
   productIds: string[];
   status: 'draft' | 'published';
   publishedAt?: string;
+  scheduledPublishAt?: string;
 }
 
 export interface Favorite {

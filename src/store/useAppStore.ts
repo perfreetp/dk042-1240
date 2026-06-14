@@ -56,6 +56,12 @@ interface AppState {
   getTrialsByProductId: (productId: string) => TrialApplication[];
   detectDuplicates: () => { groupKey: string; reason: string; products: Product[] }[];
   getPublishedRankings: () => Ranking[];
+  getRecent7DayStats: () => { trials: number; favorites: number; reviews: number };
+  getRecent7DayTrend: () => { date: string; trials: number; favorites: number; reviews: number }[];
+  getTodayFollowUps: () => TrialApplication[];
+  getOverdueFollowUps: () => TrialApplication[];
+  scheduleRankingPublish: (rankingId: string, scheduledAt: string) => void;
+  checkScheduledRankings: () => string[];
 }
 
 const defaultFilters: Filters = {
@@ -445,5 +451,97 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     return Array.from(groups.entries()).map(([groupKey, val]) => ({ groupKey, ...val })).filter(g => g.products.length > 1);
-  }
+  },
+
+  getRecent7DayStats: () => {
+    const state = get();
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const trialCount = state.trials.filter(t => new Date(t.createdAt) >= sevenDaysAgo).length;
+    const favCount = state.favorites.filter(f => new Date(f.addedAt) >= sevenDaysAgo).length;
+    const reviewCount = state.reviews.filter(r => new Date(r.date) >= sevenDaysAgo && !r.isApproved).length;
+
+    return { trials: trialCount, favorites: favCount, reviews: reviewCount };
+  },
+
+  getRecent7DayTrend: () => {
+    const state = get();
+    const result: { date: string; trials: number; favorites: number; reviews: number }[] = [];
+    const now = new Date();
+
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const dateStr = d.toISOString().split('T')[0];
+      const nextD = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+
+      const trials = state.trials.filter(t => {
+        const td = new Date(t.createdAt);
+        return td >= d && td < nextD;
+      }).length;
+
+      const favorites = state.favorites.filter(f => {
+        const fd = new Date(f.addedAt);
+        return fd >= d && fd < nextD;
+      }).length;
+
+      const reviews = state.reviews.filter(r => {
+        const rd = new Date(r.date);
+        return rd >= d && rd < nextD && !r.isApproved;
+      }).length;
+
+      result.push({ date: dateStr, trials, favorites, reviews });
+    }
+
+    return result;
+  },
+
+  getTodayFollowUps: () => {
+    const state = get();
+    const today = new Date().toISOString().split('T')[0];
+    return state.trials.filter(t => {
+      if (!t.nextContactAt) return false;
+      const contactDate = t.nextContactAt.split('T')[0];
+      return contactDate === today && t.status !== 'completed' && t.status !== 'rejected';
+    }).sort((a, b) => (a.nextContactAt || '').localeCompare(b.nextContactAt || ''));
+  },
+
+  getOverdueFollowUps: () => {
+    const state = get();
+    const today = new Date().toISOString().split('T')[0];
+    return state.trials.filter(t => {
+      if (!t.nextContactAt) return false;
+      const contactDate = t.nextContactAt.split('T')[0];
+      return contactDate < today && t.status !== 'completed' && t.status !== 'rejected';
+    }).sort((a, b) => (a.nextContactAt || '').localeCompare(b.nextContactAt || ''));
+  },
+
+  scheduleRankingPublish: (rankingId, scheduledAt) => set((state) => {
+    const newRankings = state.rankings.map(r =>
+      r.id === rankingId ? { ...r, scheduledPublishAt: scheduledAt } : r
+    );
+    saveToStorage('rankings', newRankings);
+    return { rankings: newRankings };
+  }),
+
+  checkScheduledRankings: () => {
+    const state = get();
+    const now = new Date();
+    const toPublish: string[] = [];
+
+    const newRankings = state.rankings.map(r => {
+      if (r.status === 'draft' && r.scheduledPublishAt && new Date(r.scheduledPublishAt) <= now) {
+        toPublish.push(r.id);
+        return { ...r, status: 'published' as const, publishedAt: new Date().toISOString(), scheduledPublishAt: undefined };
+      }
+      return r;
+    });
+
+    if (toPublish.length > 0) {
+      saveToStorage('rankings', newRankings);
+      set({ rankings: newRankings });
+    }
+
+    return toPublish;
+  },
 }));

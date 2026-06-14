@@ -32,6 +32,18 @@ export function TrialsPage() {
   const { trials, getProductById, setSelectedProduct, setShowProductDetail } = useAppStore();
   const [statusFilter, setStatusFilter] = useState<TrialStatus | 'all'>('all');
 
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const isToday = (dateStr: string | undefined) => {
+    if (!dateStr) return false;
+    return dateStr.split('T')[0] === todayStr;
+  };
+
+  const isOverdue = (dateStr: string | undefined) => {
+    if (!dateStr) return false;
+    return dateStr.split('T')[0] < todayStr;
+  };
+
   const filteredTrials = trials
     .filter((t) => statusFilter === 'all' || t.status === statusFilter)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -148,9 +160,56 @@ export function TrialsPage() {
                         )}
 
                         {trial.nextContactAt && (
-                          <div className="flex items-center gap-1.5 text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded-md inline-flex mb-2">
-                            <Calendar size={12} />
-                            <span>下次联系：{new Date(trial.nextContactAt).toLocaleDateString('zh-CN')}</span>
+                          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-2 ${
+                            isOverdue(trial.nextContactAt)
+                              ? 'bg-red-50 border border-red-100'
+                              : isToday(trial.nextContactAt)
+                              ? 'bg-blue-50 border border-blue-100'
+                              : 'bg-slate-50 border border-slate-100'
+                          }`}>
+                            <Calendar size={16} className={`flex-shrink-0 ${
+                              isOverdue(trial.nextContactAt)
+                                ? 'text-red-500'
+                                : isToday(trial.nextContactAt)
+                                ? 'text-blue-500'
+                                : 'text-slate-400'
+                            }`} />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`text-sm font-medium ${
+                                  isOverdue(trial.nextContactAt)
+                                    ? 'text-red-700'
+                                    : isToday(trial.nextContactAt)
+                                    ? 'text-blue-700'
+                                    : 'text-slate-700'
+                                }`}>
+                                  下次联系时间
+                                </span>
+                                {isToday(trial.nextContactAt) && (
+                                  <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-blue-600 text-white rounded-full">
+                                    今天联系
+                                  </span>
+                                )}
+                                {isOverdue(trial.nextContactAt) && (
+                                  <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-red-600 text-white rounded-full">
+                                    已逾期
+                                  </span>
+                                )}
+                              </div>
+                              <p className={`text-sm ${
+                                isOverdue(trial.nextContactAt)
+                                  ? 'text-red-600'
+                                  : isToday(trial.nextContactAt)
+                                  ? 'text-blue-600'
+                                  : 'text-slate-600'
+                              }`}>
+                                {new Date(trial.nextContactAt).toLocaleDateString('zh-CN', {
+                                  year: 'numeric',
+                                  month: 'long',
+                                  day: 'numeric',
+                                })}
+                              </p>
+                            </div>
                           </div>
                         )}
 
