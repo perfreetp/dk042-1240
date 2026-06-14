@@ -100,4 +100,21 @@ export interface MatchResult {
   reasons: string[];
 }
 
-export type AdminTab = 'products' | 'duplicates' | 'rankings' | 'reviews';
+export type TrialStatus = 'pending' | 'processing' | 'approved' | 'rejected' | 'completed';
+
+export interface TrialApplication {
+  id: string;
+  productId: string;
+  contactName: string;
+  companyName: string;
+  teamSize: string;
+  phone: string;
+  email: string;
+  note: string;
+  status: TrialStatus;
+  adminNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AdminTab = 'products' | 'duplicates' | 'rankings' | 'reviews' | 'trials';

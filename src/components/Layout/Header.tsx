@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Search, Heart, BarChart3, ListChecks, ClipboardList, Settings, Menu, X, Sparkles } from 'lucide-react';
+import { Search, Heart, BarChart3, ListChecks, ClipboardList, Settings, Menu, X, Sparkles, FlaskConical } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 
 const navItems = [
@@ -9,6 +9,7 @@ const navItems = [
   { to: '/compare', label: '产品对比', icon: Sparkles },
   { to: '/favorites', label: '我的收藏', icon: Heart },
   { to: '/survey', label: '智能选型', icon: ClipboardList },
+  { to: '/trials', label: '试用记录', icon: FlaskConical },
 ];
 
 export function Header() {

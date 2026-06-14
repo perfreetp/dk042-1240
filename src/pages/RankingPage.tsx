@@ -2,12 +2,11 @@ import { useState } from 'react';
 import { Trophy, TrendingUp, Sparkles, Star, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Rating } from '@/components/Rating';
-import { rankings } from '@/data/rankings';
 import { categoryLabels, formatPrice } from '@/utils/constants';
 import type { Ranking as RankingType } from '@/types';
 
 export function RankingPage() {
-  const { getProductById, setSelectedProduct, setShowProductDetail } = useAppStore();
+  const { rankings, getProductById, setSelectedProduct, setShowProductDetail } = useAppStore();
   const [activeRanking, setActiveRanking] = useState<RankingType>(rankings[0]);
 
   const handleViewProduct = (productId: string) => {
