@@ -6,8 +6,9 @@ import { categoryLabels, formatPrice } from '@/utils/constants';
 import type { Ranking as RankingType } from '@/types';
 
 export function RankingPage() {
-  const { rankings, getProductById, setSelectedProduct, setShowProductDetail } = useAppStore();
-  const [activeRanking, setActiveRanking] = useState<RankingType>(rankings[0]);
+  const { getPublishedRankings, getProductById, setSelectedProduct, setShowProductDetail } = useAppStore();
+  const rankings = getPublishedRankings();
+  const [activeRanking, setActiveRanking] = useState<RankingType | undefined>(rankings[0]);
 
   const handleViewProduct = (productId: string) => {
     setSelectedProduct(productId);
@@ -21,6 +22,15 @@ export function RankingPage() {
     return 'bg-slate-100 text-slate-600';
   };
 
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const rankingCategories = [
     { key: 'all', label: '全部榜单', icon: Trophy },
     { key: 'rating', label: '满意度榜', icon: Star },
@@ -28,9 +38,45 @@ export function RankingPage() {
     { key: 'new', label: '新锐榜', icon: Sparkles },
   ];
 
-  const filteredRankings = rankings.filter(
-    r => activeRanking.type === r.type || activeRanking.category === r.category
-  );
+  const filteredRankings = activeRanking
+    ? rankings.filter(
+        r => activeRanking.type === r.type || activeRanking.category === r.category
+      )
+    : [];
+
+  if (rankings.length === 0) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="text-center mb-10">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-amber-50 text-amber-700 rounded-full text-sm font-medium mb-4">
+            <Trophy size={16} />
+            <span>权威榜单</span>
+          </div>
+          <h1 className="text-4xl font-bold text-slate-800 mb-4">
+            SaaS 工具
+            <span className="bg-gradient-to-r from-amber-500 to-orange-500 bg-clip-text text-transparent">
+              {' '}排行榜
+            </span>
+          </h1>
+          <p className="text-slate-500 max-w-2xl mx-auto">
+            基于真实用户评价和使用数据，为你推荐各领域最优秀的 SaaS 产品
+          </p>
+        </div>
+
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="bg-white rounded-2xl border border-slate-200 p-12 max-w-md w-full text-center shadow-sm">
+            <div className="w-20 h-20 bg-gradient-to-br from-amber-100 to-orange-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <Trophy size={40} className="text-amber-500" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-800 mb-3">榜单建设中</h2>
+            <p className="text-slate-500 text-base leading-relaxed">
+              运营团队正在准备高质量榜单，敬请期待...
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -55,13 +101,13 @@ export function RankingPage() {
           <button
             key={cat.key}
             onClick={() => {
-              const ranking = rankings.find(r => 
+              const ranking = rankings.find(r =>
                 cat.key === 'all' ? true : r.type === cat.key
               );
               if (ranking) setActiveRanking(ranking);
             }}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
-              activeRanking.type === cat.key || (cat.key === 'all' && activeRanking.category === 'all')
+              activeRanking?.type === cat.key || (cat.key === 'all' && activeRanking?.category === 'all')
                 ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-500/25'
                 : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
             }`}
@@ -80,23 +126,28 @@ export function RankingPage() {
               key={ranking.id}
               onClick={() => setActiveRanking(ranking)}
               className={`w-full text-left p-4 rounded-xl transition-all ${
-                activeRanking.id === ranking.id
+                activeRanking?.id === ranking.id
                   ? 'bg-gradient-to-r from-blue-50 to-cyan-50 border-2 border-blue-400 shadow-md'
                   : 'bg-white border border-slate-200 hover:border-slate-300'
               }`}
             >
               <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  activeRanking.id === ranking.id ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'
+                  activeRanking?.id === ranking.id ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'
                 }`}>
                   <Trophy size={20} />
                 </div>
                 <div>
                   <h4 className={`font-medium ${
-                    activeRanking.id === ranking.id ? 'text-blue-700' : 'text-slate-700'
+                    activeRanking?.id === ranking.id ? 'text-blue-700' : 'text-slate-700'
                   }`}>
                     {ranking.name}
                   </h4>
+                  {ranking.publishedAt && (
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {formatDate(ranking.publishedAt)}
+                    </p>
+                  )}
                   <p className="text-xs text-slate-400">
                     {ranking.productIds.length} 款产品
                   </p>
@@ -114,16 +165,19 @@ export function RankingPage() {
                   <Trophy size={24} />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-slate-800">{activeRanking.name}</h2>
+                  <h2 className="text-xl font-bold text-slate-800">{activeRanking?.name}</h2>
                   <p className="text-sm text-slate-500">
-                    共 {activeRanking.productIds.length} 款产品上榜
+                    {activeRanking?.publishedAt && (
+                      <span className="mr-3">{formatDate(activeRanking.publishedAt)}</span>
+                    )}
+                    共 {activeRanking?.productIds.length} 款产品上榜
                   </p>
                 </div>
               </div>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {activeRanking.productIds.map((productId, index) => {
+              {activeRanking?.productIds.map((productId, index) => {
                 const product = getProductById(productId);
                 if (!product) return null;
                 const rank = index + 1;

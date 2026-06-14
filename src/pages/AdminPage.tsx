@@ -18,8 +18,14 @@ import {
   ArrowDown,
   CheckCircle2,
   GripVertical,
+  Heart,
+  BarChart3,
+  Calendar,
+  User,
+  PlusCircle,
+  History,
 } from 'lucide-react';
-import type { AdminTab, Product, Ranking, TrialStatus } from '@/types';
+import type { AdminTab, Product, Ranking, TrialStatus, TrialFollowUp } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { categoryLabels, formatPrice } from '@/utils/constants';
 
@@ -38,12 +44,29 @@ const trialStatusConfig: Record<TrialStatus, { label: string; color: string }> =
   completed: { label: '已完成', color: 'bg-emerald-100 text-emerald-700' },
 };
 
+const followUpResultLabels: Record<NonNullable<TrialFollowUp['result']>, string> = {
+  contacted: '已联系',
+  scheduled: '已预约',
+  converted: '已转化',
+  lost: '已流失',
+};
+
+const followUpResultColors: Record<NonNullable<TrialFollowUp['result']>, string> = {
+  contacted: 'bg-blue-100 text-blue-700',
+  scheduled: 'bg-purple-100 text-purple-700',
+  converted: 'bg-green-100 text-green-700',
+  lost: 'bg-slate-100 text-slate-600',
+};
+
+const ownerOptions = ['张小明', '李小红', '王大伟', '赵美丽'];
+
 export function AdminPage() {
   const {
     products,
     reviews,
     trials,
     rankings,
+    favorites,
     adminTab,
     setAdminTab,
     addProduct,
@@ -54,9 +77,14 @@ export function AdminPage() {
     deleteReview,
     addTrial,
     updateTrialStatus,
+    assignTrialOwner,
+    addTrialFollowUp,
+    updateTrialNextContact,
     addRanking,
     updateRanking,
     deleteRanking,
+    publishRanking,
+    unpublishRanking,
     reorderRankingProducts,
     detectDuplicates,
   } = useAppStore();
@@ -65,6 +93,8 @@ export function AdminPage() {
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [selectedForMerge, setSelectedForMerge] = useState<string[]>([]);
+  const [selectedMergeGroupKey, setSelectedMergeGroupKey] = useState<string | null>(null);
+  const [mergedGroupKeys, setMergedGroupKeys] = useState<Set<string>>(new Set());
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [showRankingForm, setShowRankingForm] = useState(false);
   const [editingRanking, setEditingRanking] = useState<Ranking | null>(null);
@@ -72,8 +102,13 @@ export function AdminPage() {
   const [trialFilter, setTrialFilter] = useState<TrialStatus | 'all'>('all');
   const [adminNoteTrialId, setAdminNoteTrialId] = useState<string | null>(null);
   const [adminNoteText, setAdminNoteText] = useState('');
+  const [expandedTrialIds, setExpandedTrialIds] = useState<Set<string>>(new Set());
+  const [followUpFormTrialId, setFollowUpFormTrialId] = useState<string | null>(null);
+  const [followUpContent, setFollowUpContent] = useState('');
+  const [followUpResult, setFollowUpResult] = useState<NonNullable<TrialFollowUp['result']>>('contacted');
 
   const tabs = [
+    { key: 'dashboard', label: '数据看板', icon: BarChart3 },
     { key: 'products', label: '产品管理', icon: Package },
     { key: 'duplicates', label: '重复合并', icon: Merge },
     { key: 'rankings', label: '榜单管理', icon: Trophy },
@@ -91,23 +126,63 @@ export function AdminPage() {
 
   const duplicateGroups = detectDuplicates();
 
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const recentTrialsCount = trials.filter(t => t.createdAt >= sevenDaysAgo).length;
+  const pendingReviewsCount = pendingReviews.length;
+  const favoritesCount = favorites.length;
+  const publishedRankingsCount = rankings.filter(r => r.status === 'published').length;
+
+  const latestTrials = [...trials]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 5);
+
+  const hotRankings = rankings
+    .filter(r => r.status === 'published')
+    .sort((a, b) => b.productIds.length - a.productIds.length)
+    .slice(0, 5);
+
   const toggleSection = (section: string) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
 
-  const handleSelectForMerge = (productId: string) => {
-    setSelectedForMerge(prev =>
-      prev.includes(productId)
-        ? prev.filter(id => id !== productId)
-        : [...prev, productId]
-    );
+  const toggleTrialExpand = (trialId: string) => {
+    setExpandedTrialIds(prev => {
+      const next = new Set(prev);
+      if (next.has(trialId)) {
+        next.delete(trialId);
+      } else {
+        next.add(trialId);
+      }
+      return next;
+    });
   };
 
-  const handleMerge = (targetId: string) => {
+  const handleSelectForMerge = (productId: string, groupKey: string) => {
+    if (selectedMergeGroupKey && selectedMergeGroupKey !== groupKey) {
+      return;
+    }
+    const isSelected = selectedForMerge.includes(productId);
+    if (isSelected) {
+      const next = selectedForMerge.filter(id => id !== productId);
+      setSelectedForMerge(next);
+      if (next.length === 0) {
+        setSelectedMergeGroupKey(null);
+      }
+    } else {
+      setSelectedForMerge(prev => [...prev, productId]);
+      if (!selectedMergeGroupKey) {
+        setSelectedMergeGroupKey(groupKey);
+      }
+    }
+  };
+
+  const handleMerge = (targetId: string, groupKey: string) => {
     const sources = selectedForMerge.filter(id => id !== targetId);
     if (sources.length > 0) {
       mergeProducts(sources, targetId);
       setSelectedForMerge([]);
+      setSelectedMergeGroupKey(null);
+      setMergedGroupKeys(prev => new Set(prev).add(groupKey));
     }
   };
 
@@ -162,6 +237,19 @@ export function AdminPage() {
     setAdminNoteText('');
   };
 
+  const handleAddFollowUp = (trialId: string) => {
+    const trial = trials.find(t => t.id === trialId);
+    const operator = trial?.owner || '运营';
+    addTrialFollowUp(trialId, {
+      content: followUpContent,
+      operator,
+      result: followUpResult,
+    });
+    setFollowUpContent('');
+    setFollowUpResult('contacted');
+    setFollowUpFormTrialId(null);
+  };
+
   const filteredTrials = trialFilter === 'all'
     ? trials
     : trials.filter(t => t.status === trialFilter);
@@ -169,6 +257,41 @@ export function AdminPage() {
   const sortedTrials = [...filteredTrials].sort(
     (a, b) => b.createdAt.localeCompare(a.createdAt)
   );
+
+  const metricCards = [
+    {
+      label: '近7日新增试用',
+      value: recentTrialsCount,
+      icon: FlaskConical,
+      bg: 'bg-blue-50',
+      iconBg: 'bg-blue-500',
+      text: 'text-blue-600',
+    },
+    {
+      label: '待审核评价',
+      value: pendingReviewsCount,
+      icon: MessageSquare,
+      bg: 'bg-orange-50',
+      iconBg: 'bg-orange-500',
+      text: 'text-orange-600',
+    },
+    {
+      label: '收藏总数',
+      value: favoritesCount,
+      icon: Heart,
+      bg: 'bg-red-50',
+      iconBg: 'bg-red-500',
+      text: 'text-red-600',
+    },
+    {
+      label: '已发布榜单',
+      value: publishedRankingsCount,
+      icon: Trophy,
+      bg: 'bg-purple-50',
+      iconBg: 'bg-purple-500',
+      text: 'text-purple-600',
+    },
+  ];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -203,6 +326,125 @@ export function AdminPage() {
         </div>
 
         <div className="flex-1 min-w-0">
+          {adminTab === 'dashboard' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {metricCards.map((card) => (
+                  <div key={card.label} className={`${card.bg} rounded-xl p-5 border border-slate-100`}>
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-sm text-slate-600 mb-1">{card.label}</p>
+                        <p className={`text-3xl font-bold ${card.text}`}>{card.value}</p>
+                      </div>
+                      <div className={`${card.iconBg} w-10 h-10 rounded-lg flex items-center justify-center text-white`}>
+                        <card.icon size={20} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="flex items-center justify-between p-4 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <FlaskConical className="text-blue-500" size={18} />
+                      <h2 className="font-semibold text-slate-800">最新试用申请</h2>
+                    </div>
+                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">
+                      {latestTrials.length} 条
+                    </span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {latestTrials.map((trial) => {
+                      const product = products.find(p => p.id === trial.productId);
+                      const statusCfg = trialStatusConfig[trial.status];
+                      return (
+                        <div key={trial.id} className="p-4 hover:bg-slate-50 transition-colors">
+                          <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-3 min-w-0">
+                              {product && (
+                                <div className="w-9 h-9 bg-slate-100 rounded-lg flex items-center justify-center text-lg flex-shrink-0">
+                                  {product.logo}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <p className="font-medium text-slate-800 text-sm truncate">
+                                  {product?.name || '未知产品'}
+                                </p>
+                                <p className="text-xs text-slate-500 mt-0.5 truncate">
+                                  {trial.contactName} · {trial.companyName}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0 ml-2">
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${statusCfg.color}`}>
+                                {statusCfg.label}
+                              </span>
+                              <span className="text-xs text-slate-400">
+                                {new Date(trial.createdAt).toLocaleDateString('zh-CN')}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {latestTrials.length === 0 && (
+                      <div className="text-center py-12 text-slate-500">
+                        <FlaskConical size={36} className="mx-auto mb-2 text-slate-300" />
+                        <p className="text-sm">暂无试用申请</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="flex items-center justify-between p-4 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <Trophy className="text-purple-500" size={18} />
+                      <h2 className="font-semibold text-slate-800">热门榜单</h2>
+                    </div>
+                    <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full">
+                      {hotRankings.length} 个
+                    </span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {hotRankings.map((ranking, idx) => (
+                      <div key={ranking.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ${
+                            idx === 0 ? 'bg-gradient-to-br from-amber-400 to-orange-500' :
+                            idx === 1 ? 'bg-gradient-to-br from-slate-400 to-slate-500' :
+                            idx === 2 ? 'bg-gradient-to-br from-orange-300 to-amber-500' :
+                            'bg-slate-200 text-slate-600'
+                          }`}>
+                            {idx + 1}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium text-slate-800 text-sm truncate">{ranking.name}</p>
+                            <p className="text-xs text-slate-400 mt-0.5">
+                              {rankingTypeLabels[ranking.type] || ranking.type}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                          <Package size={12} className="text-slate-400" />
+                          <span className="text-sm font-medium text-slate-700">{ranking.productIds.length}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {hotRankings.length === 0 && (
+                      <div className="text-center py-12 text-slate-500">
+                        <Trophy size={36} className="mx-auto mb-2 text-slate-300" />
+                        <p className="text-sm">暂无已发布榜单</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {adminTab === 'products' && (
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="flex items-center justify-between p-4 border-b border-slate-100">
@@ -319,12 +561,21 @@ export function AdminPage() {
                 </div>
 
                 {selectedForMerge.length > 0 && (
-                  <div className="mb-4 p-3 bg-blue-50 rounded-lg flex items-center justify-between">
-                    <span className="text-sm text-blue-700">
-                      已选择 {selectedForMerge.length} 个产品
-                    </span>
+                  <div className="mb-4 p-3 bg-blue-50 rounded-lg flex items-center justify-between border border-blue-100">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-blue-700">
+                        已选择 {selectedForMerge.length} 个产品
+                      </span>
+                      {selectedMergeGroupKey && (
+                        <span className="text-xs px-2 py-0.5 bg-blue-200 text-blue-800 rounded-full">
+                          仅当前组内合并
+                        </span>
+                      )}
+                    </div>
                     <button
-                      onClick={() => handleMerge(selectedForMerge[0])}
+                      onClick={() => {
+                        if (selectedMergeGroupKey) handleMerge(selectedForMerge[0], selectedMergeGroupKey);
+                      }}
                       disabled={selectedForMerge.length < 2}
                       className="px-3 py-1 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -334,62 +585,108 @@ export function AdminPage() {
                 )}
 
                 <div className="space-y-3">
-                  {duplicateGroups.map((group) => (
-                    <div key={group.groupKey} className="border border-slate-200 rounded-lg overflow-hidden">
-                      <button
-                        onClick={() => toggleSection(group.groupKey)}
-                        className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-slate-100 transition-colors"
+                  {duplicateGroups.map((group) => {
+                    const isGroupMerged = mergedGroupKeys.has(group.groupKey);
+                    const isGroupDisabled = selectedMergeGroupKey !== null && selectedMergeGroupKey !== group.groupKey;
+
+                    return (
+                      <div
+                        key={group.groupKey}
+                        className={`border rounded-lg overflow-hidden transition-opacity ${
+                          isGroupDisabled ? 'opacity-50 border-slate-100' : 'border-slate-200'
+                        }`}
                       >
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-slate-600">疑似重复组 - {group.reason}</span>
-                          <span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full">
-                            {group.products.length} 款产品
-                          </span>
-                        </div>
-                        {expandedSections[group.groupKey] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                      </button>
+                        <button
+                          onClick={() => toggleSection(group.groupKey)}
+                          disabled={isGroupMerged}
+                          className={`w-full flex items-center justify-between p-3 transition-colors ${
+                            isGroupMerged ? 'bg-green-50 cursor-default' : 'bg-slate-50 hover:bg-slate-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            {isGroupMerged ? (
+                              <CheckCircle2 className="text-green-500" size={18} />
+                            ) : (
+                              <span className="text-sm text-slate-600">疑似重复组 - {group.reason}</span>
+                            )}
+                            {isGroupMerged ? (
+                              <span className="text-sm font-medium text-green-700">已合并 ✓</span>
+                            ) : (
+                              <span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full">
+                                {group.products.length} 款产品
+                              </span>
+                            )}
+                          </div>
+                          {!isGroupMerged && (
+                            expandedSections[group.groupKey] ? <ChevronUp size={16} /> : <ChevronDown size={16} />
+                          )}
+                        </button>
 
-                      {expandedSections[group.groupKey] && (
-                        <div className="p-3 space-y-2">
-                          {group.products.map((product) => {
-                            const isSelected = selectedForMerge.includes(product.id);
+                        {isGroupMerged && (
+                          <div className="p-6 bg-green-50/50 text-center">
+                            <CheckCircle2 size={40} className="mx-auto mb-2 text-green-400" />
+                            <p className="text-sm text-green-700 font-medium">该组产品已完成合并</p>
+                          </div>
+                        )}
 
-                            return (
-                              <div
-                                key={product.id}
-                                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                                  isSelected
-                                    ? 'border-blue-400 bg-blue-50'
-                                    : 'border-slate-200 hover:border-slate-300'
-                                }`}
-                                onClick={() => handleSelectForMerge(product.id)}
-                              >
-                                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                                  isSelected ? 'border-blue-500 bg-blue-500' : 'border-slate-300'
-                                }`}>
-                                  {isSelected && <Check size={12} className="text-white" />}
-                                </div>
-                                <span className="text-xl">{product.logo}</span>
-                                <div className="flex-1">
-                                  <p className="font-medium text-slate-800">{product.name}</p>
-                                  <p className="text-xs text-slate-400">{formatPrice(product.priceRange)} · {categoryLabels[product.category]}</p>
-                                </div>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleMerge(product.id);
-                                  }}
-                                  className="px-3 py-1 text-xs bg-orange-100 text-orange-700 rounded-md hover:bg-orange-200 transition-colors"
+                        {expandedSections[group.groupKey] && !isGroupMerged && (
+                          <div className="p-3 space-y-2 bg-white">
+                            {group.products.map((product) => {
+                              const isSelected = selectedForMerge.includes(product.id);
+
+                              return (
+                                <div
+                                  key={product.id}
+                                  className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
+                                    isGroupDisabled
+                                      ? 'cursor-not-allowed bg-slate-50 border-slate-100'
+                                      : isSelected
+                                      ? 'border-blue-400 bg-blue-50 cursor-pointer'
+                                      : 'border-slate-200 hover:border-slate-300 cursor-pointer'
+                                  }`}
+                                  onClick={() => !isGroupDisabled && handleSelectForMerge(product.id, group.groupKey)}
                                 >
-                                  设为主版本
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                                    isSelected ? 'border-blue-500 bg-blue-500' : isGroupDisabled ? 'border-slate-200 bg-slate-50' : 'border-slate-300'
+                                  }`}>
+                                    {isSelected && <Check size={12} className="text-white" />}
+                                  </div>
+                                  <span className="text-xl">{product.logo}</span>
+                                  <div className="flex-1 min-w-0">
+                                    <p className={`font-medium truncate ${isGroupDisabled ? 'text-slate-400' : 'text-slate-800'}`}>
+                                      {product.name}
+                                    </p>
+                                    <p className="text-xs text-slate-400 truncate">
+                                      {formatPrice(product.priceRange)} · {categoryLabels[product.category]}
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!isGroupDisabled) handleMerge(product.id, group.groupKey);
+                                    }}
+                                    disabled={isGroupDisabled}
+                                    className={`px-3 py-1 text-xs rounded-md transition-colors flex-shrink-0 ${
+                                      isGroupDisabled
+                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        : 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+                                    }`}
+                                  >
+                                    设为主版本
+                                  </button>
+                                </div>
+                              );
+                            })}
+                            {isGroupDisabled && (
+                              <p className="text-xs text-slate-400 text-center pt-2 pb-1">
+                                请先取消其他组的选择，才能在本组操作
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
 
                   {duplicateGroups.length === 0 && (
                     <div className="text-center py-12 text-slate-500">
@@ -431,14 +728,38 @@ export function AdminPage() {
                               <Trophy size={18} />
                             </div>
                             <div>
-                              <h3 className="font-medium text-slate-800">{ranking.name}</h3>
-                              <p className="text-xs text-slate-400">
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-medium text-slate-800">{ranking.name}</h3>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  ranking.status === 'draft'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-green-100 text-green-700'
+                                }`}>
+                                  {ranking.status === 'draft' ? '草稿' : '已发布'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-400 mt-0.5">
                                 {ranking.productIds.length} 款产品 · {rankingTypeLabels[ranking.type] || ranking.type}
                                 {ranking.category && ranking.category !== 'all' && ` · ${categoryLabels[ranking.category as keyof typeof categoryLabels] || ranking.category}`}
                               </p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            {ranking.status === 'draft' ? (
+                              <button
+                                onClick={() => publishRanking(ranking.id)}
+                                className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium"
+                              >
+                                发布
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => unpublishRanking(ranking.id)}
+                                className="px-3 py-1.5 text-xs bg-amber-100 text-amber-700 rounded-md hover:bg-amber-200 transition-colors font-medium"
+                              >
+                                取消发布
+                              </button>
+                            )}
                             <button
                               onClick={() => handleEditRanking(ranking)}
                               className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -595,95 +916,236 @@ export function AdminPage() {
                     {sortedTrials.map((trial) => {
                       const product = products.find(p => p.id === trial.productId);
                       const statusCfg = trialStatusConfig[trial.status];
+                      const isExpanded = expandedTrialIds.has(trial.id);
 
                       return (
-                        <div key={trial.id} className="p-4 hover:bg-slate-50 transition-colors">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex items-center gap-3">
-                              {product && (
-                                <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center text-xl">
-                                  {product.logo}
+                        <div key={trial.id} className="hover:bg-slate-50 transition-colors">
+                          <div className="p-4">
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-3">
+                                {product && (
+                                  <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center text-xl">
+                                    {product.logo}
+                                  </div>
+                                )}
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <p className="font-medium text-slate-800">
+                                      {product?.name || '未知产品'}
+                                    </p>
+                                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusCfg.color}`}>
+                                      {statusCfg.label}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400">
+                                    <span>{trial.contactName}</span>
+                                    <span>·</span>
+                                    <span>{trial.companyName}</span>
+                                    <span>·</span>
+                                    <span>{trial.teamSize}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs text-slate-400">
+                                  {new Date(trial.createdAt).toLocaleDateString('zh-CN')}
+                                </span>
+                                <button
+                                  onClick={() => toggleTrialExpand(trial.id)}
+                                  className={`p-1 rounded transition-colors ${
+                                    isExpanded ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-slate-600'
+                                  }`}
+                                >
+                                  {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="ml-13 mt-2 space-y-1 text-xs text-slate-500">
+                              <div className="flex flex-wrap gap-4">
+                                <span>电话：{trial.phone}</span>
+                                <span>邮箱：{trial.email}</span>
+                              </div>
+                              {trial.note && (
+                                <p>备注：{trial.note}</p>
+                              )}
+                              {trial.adminNote && (
+                                <div className="p-2 bg-blue-50 rounded text-blue-700">
+                                  <span className="font-medium">运营回复：</span>{trial.adminNote}
                                 </div>
                               )}
-                              <div>
+                            </div>
+
+                            <div className="ml-13 mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div className="flex items-center gap-2">
+                                <User size={14} className="text-slate-400 flex-shrink-0" />
+                                <select
+                                  value={trial.owner || ''}
+                                  onChange={(e) => assignTrialOwner(trial.id, e.target.value || '')}
+                                  className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                >
+                                  <option value="">选择负责人</option>
+                                  {ownerOptions.map(name => (
+                                    <option key={name} value={name}>{name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Calendar size={14} className="text-slate-400 flex-shrink-0" />
+                                <input
+                                  type="date"
+                                  value={trial.nextContactAt || ''}
+                                  onChange={(e) => updateTrialNextContact(trial.id, e.target.value || undefined)}
+                                  className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                />
+                              </div>
+                            </div>
+
+                            {adminNoteTrialId === trial.id && (
+                              <div className="ml-13 mt-2 flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={adminNoteText}
+                                  onChange={(e) => setAdminNoteText(e.target.value)}
+                                  placeholder="输入运营备注..."
+                                  className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                />
+                                <button
+                                  onClick={() => handleSaveAdminNote(trial.id)}
+                                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                                >
+                                  保存
+                                </button>
+                                <button
+                                  onClick={() => { setAdminNoteTrialId(null); setAdminNoteText(''); }}
+                                  className="px-3 py-1.5 text-sm bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            )}
+
+                            <div className="ml-13 mt-3 flex items-center gap-2 flex-wrap">
+                              <select
+                                value={trial.status}
+                                onChange={(e) => handleUpdateTrialStatus(trial.id, e.target.value as TrialStatus)}
+                                className="px-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                              >
+                                {Object.entries(trialStatusConfig).map(([key, cfg]) => (
+                                  <option key={key} value={key}>{cfg.label}</option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => { setAdminNoteTrialId(trial.id); setAdminNoteText(trial.adminNote || ''); }}
+                                className="px-3 py-1 text-xs text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100 transition-colors"
+                              >
+                                添加备注
+                              </button>
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="ml-13 mr-4 mb-4 border-t border-slate-100 pt-4">
+                              <div className="flex items-center justify-between mb-3">
                                 <div className="flex items-center gap-2">
-                                  <p className="font-medium text-slate-800">
-                                    {product?.name || '未知产品'}
-                                  </p>
-                                  <span className={`text-xs px-2 py-0.5 rounded-full ${statusCfg.color}`}>
-                                    {statusCfg.label}
+                                  <History size={14} className="text-slate-500" />
+                                  <h4 className="text-sm font-medium text-slate-700">跟进记录</h4>
+                                  <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
+                                    {trial.followUps.length} 条
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400">
-                                  <span>{trial.contactName}</span>
-                                  <span>·</span>
-                                  <span>{trial.companyName}</span>
-                                  <span>·</span>
-                                  <span>{trial.teamSize}</span>
+                                {followUpFormTrialId !== trial.id && (
+                                  <button
+                                    onClick={() => {
+                                      setFollowUpFormTrialId(trial.id);
+                                      setFollowUpContent('');
+                                      setFollowUpResult('contacted');
+                                    }}
+                                    className="flex items-center gap-1 px-2.5 py-1 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                                  >
+                                    <PlusCircle size={12} />
+                                    新增跟进
+                                  </button>
+                                )}
+                              </div>
+
+                              {followUpFormTrialId === trial.id && (
+                                <div className="mb-4 p-3 bg-slate-50 rounded-lg space-y-3">
+                                  <div>
+                                    <label className="block text-xs font-medium text-slate-600 mb-1">跟进内容</label>
+                                    <textarea
+                                      value={followUpContent}
+                                      onChange={(e) => setFollowUpContent(e.target.value)}
+                                      placeholder="请输入跟进内容..."
+                                      rows={3}
+                                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 resize-none"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex-1">
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">跟进结果</label>
+                                      <select
+                                        value={followUpResult}
+                                        onChange={(e) => setFollowUpResult(e.target.value as NonNullable<TrialFollowUp['result']>)}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                      >
+                                        {Object.entries(followUpResultLabels).map(([key, label]) => (
+                                          <option key={key} value={key}>{label}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center justify-end gap-2 pt-1">
+                                    <button
+                                      onClick={() => setFollowUpFormTrialId(null)}
+                                      className="px-3 py-1.5 text-xs bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors"
+                                    >
+                                      取消
+                                    </button>
+                                    <button
+                                      onClick={() => handleAddFollowUp(trial.id)}
+                                      disabled={!followUpContent.trim()}
+                                      className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                      保存
+                                    </button>
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
-                            <span className="text-xs text-slate-400">
-                              {new Date(trial.createdAt).toLocaleDateString('zh-CN')}
-                            </span>
-                          </div>
+                              )}
 
-                          <div className="ml-13 mt-2 space-y-1 text-xs text-slate-500">
-                            <div className="flex gap-4">
-                              <span>电话：{trial.phone}</span>
-                              <span>邮箱：{trial.email}</span>
-                            </div>
-                            {trial.note && (
-                              <p>备注：{trial.note}</p>
-                            )}
-                            {trial.adminNote && (
-                              <div className="p-2 bg-blue-50 rounded text-blue-700">
-                                <span className="font-medium">运营回复：</span>{trial.adminNote}
-                              </div>
-                            )}
-                          </div>
-
-                          {adminNoteTrialId === trial.id && (
-                            <div className="ml-13 mt-2 flex items-center gap-2">
-                              <input
-                                type="text"
-                                value={adminNoteText}
-                                onChange={(e) => setAdminNoteText(e.target.value)}
-                                placeholder="输入运营备注..."
-                                className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
-                              />
-                              <button
-                                onClick={() => handleSaveAdminNote(trial.id)}
-                                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                              >
-                                保存
-                              </button>
-                              <button
-                                onClick={() => { setAdminNoteTrialId(null); setAdminNoteText(''); }}
-                                className="px-3 py-1.5 text-sm bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
-                              >
-                                取消
-                              </button>
+                              {trial.followUps.length > 0 ? (
+                                <div className="relative pl-5 border-l-2 border-slate-100 space-y-4">
+                                  {trial.followUps.map((fu) => (
+                                    <div key={fu.id} className="relative">
+                                      <div className="absolute -left-[22px] top-0.5 w-3 h-3 rounded-full bg-white border-2 border-blue-400" />
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                                            <span className="text-xs font-medium text-slate-700">{fu.operator}</span>
+                                            <span className="text-xs text-slate-400">
+                                              {new Date(fu.createdAt).toLocaleString('zh-CN')}
+                                            </span>
+                                            {fu.result && (
+                                              <span className={`text-xs px-1.5 py-0.5 rounded ${followUpResultColors[fu.result]}`}>
+                                                {followUpResultLabels[fu.result]}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <p className="text-xs text-slate-600 whitespace-pre-wrap break-words">
+                                            {fu.content}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : followUpFormTrialId !== trial.id ? (
+                                <div className="text-center py-6 text-slate-400">
+                                  <p className="text-xs">暂无跟进记录，点击右上角按钮新增</p>
+                                </div>
+                              ) : null}
                             </div>
                           )}
-
-                          <div className="ml-13 mt-3 flex items-center gap-2">
-                            <select
-                              value={trial.status}
-                              onChange={(e) => handleUpdateTrialStatus(trial.id, e.target.value as TrialStatus)}
-                              className="px-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
-                            >
-                              {Object.entries(trialStatusConfig).map(([key, cfg]) => (
-                                <option key={key} value={key}>{cfg.label}</option>
-                              ))}
-                            </select>
-                            <button
-                              onClick={() => { setAdminNoteTrialId(trial.id); setAdminNoteText(trial.adminNote || ''); }}
-                              className="px-3 py-1 text-xs text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100 transition-colors"
-                            >
-                              添加备注
-                            </button>
-                          </div>
                         </div>
                       );
                     })}
@@ -718,7 +1180,7 @@ export function AdminPage() {
             if (editingRanking) {
               updateRanking(editingRanking.id, data);
             } else {
-              addRanking(data as any);
+              addRanking({ ...data, status: 'draft' } as any);
             }
             setShowRankingForm(false);
           }}
@@ -911,6 +1373,7 @@ function RankingFormModal({ ranking, onClose, onSave }: RankingFormModalProps) {
     category: ranking?.category || 'all',
     type: ranking?.type || 'rating' as const,
     productIds: ranking?.productIds || [] as string[],
+    status: ranking?.status || 'draft',
   });
 
   const [productSearch, setProductSearch] = useState('');
@@ -935,6 +1398,7 @@ function RankingFormModal({ ranking, onClose, onSave }: RankingFormModalProps) {
       category: formData.category,
       type: formData.type,
       productIds: formData.productIds,
+      status: formData.status,
     });
   };
 

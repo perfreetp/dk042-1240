@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Product, Filters, Favorite, Review, AdminTab, TrialApplication, TrialStatus, Ranking } from '@/types';
+import type { Product, Filters, Favorite, Review, AdminTab, TrialApplication, TrialStatus, Ranking, TrialFollowUp } from '@/types';
 import { products as initialProducts } from '@/data/products';
 import { reviews as initialReviews } from '@/data/reviews';
 import { rankings as initialRankings } from '@/data/rankings';
@@ -38,18 +38,24 @@ interface AppState {
   updateProduct: (productId: string, updates: Partial<Product>) => void;
   deleteProduct: (productId: string) => void;
   mergeProducts: (sourceIds: string[], targetId: string) => void;
-  addTrial: (trial: Omit<TrialApplication, 'id' | 'status' | 'createdAt' | 'updatedAt'>) => void;
+  addTrial: (trial: Omit<TrialApplication, 'id' | 'status' | 'createdAt' | 'updatedAt' | 'followUps'>) => void;
   updateTrialStatus: (trialId: string, status: TrialStatus, adminNote?: string) => void;
-  addRanking: (ranking: Omit<Ranking, 'id'>) => void;
+  assignTrialOwner: (trialId: string, owner: string) => void;
+  addTrialFollowUp: (trialId: string, data: Omit<TrialFollowUp, 'id' | 'trialId' | 'createdAt'>) => void;
+  updateTrialNextContact: (trialId: string, nextContactAt: string | undefined) => void;
+  addRanking: (ranking: Omit<Ranking, 'id' | 'status'> & { status?: 'draft' | 'published' }) => void;
   updateRanking: (rankingId: string, updates: Partial<Ranking>) => void;
   deleteRanking: (rankingId: string) => void;
   reorderRankingProducts: (rankingId: string, productIds: string[]) => void;
+  publishRanking: (rankingId: string) => void;
+  unpublishRanking: (rankingId: string) => void;
   setAdminTab: (tab: AdminTab) => void;
   getFilteredProducts: () => Product[];
   getProductById: (id: string) => Product | undefined;
   getReviewsByProductId: (productId: string) => Review[];
   getTrialsByProductId: (productId: string) => TrialApplication[];
   detectDuplicates: () => { groupKey: string; reason: string; products: Product[] }[];
+  getPublishedRankings: () => Ranking[];
 }
 
 const defaultFilters: Filters = {
@@ -67,8 +73,17 @@ const defaultFilters: Filters = {
 const loadFavorites = (): Favorite[] => loadFromStorage<Favorite[]>('favorites', []) || [];
 const loadProducts = (): Product[] => loadFromStorage<Product[]>('products', null) || initialProducts;
 const loadReviews = (): Review[] => loadFromStorage<Review[]>('reviews', null) || initialReviews;
-const loadRankings = (): Ranking[] => loadFromStorage<Ranking[]>('rankings', null) || initialRankings;
-const loadTrials = (): TrialApplication[] => loadFromStorage<TrialApplication[]>('trials', []) || [];
+const loadRankings = (): Ranking[] => {
+  const stored = loadFromStorage<Ranking[]>('rankings', null);
+  if (stored) {
+    return stored.map(r => r.status ? r : { ...r, status: 'published' as const, publishedAt: new Date().toISOString() });
+  }
+  return initialRankings.map(r => ({ ...r, status: 'published' as const, publishedAt: new Date().toISOString() } as Ranking));
+};
+const loadTrials = (): TrialApplication[] => {
+  const stored = loadFromStorage<TrialApplication[]>('trials', []) || [];
+  return stored.map(t => ({ followUps: [], ...t }));
+};
 
 export const useAppStore = create<AppState>((set, get) => ({
   products: loadProducts(),
@@ -79,7 +94,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   favorites: loadFavorites(),
   selectedProductId: null,
   showProductDetail: false,
-  adminTab: 'products',
+  adminTab: 'dashboard',
   trials: loadTrials(),
 
   setFilters: (newFilters) => set((state) => ({
@@ -89,7 +104,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   resetFilters: () => set({ filters: defaultFilters }),
 
   addToCompare: (productId) => set((state) => {
-    if (state.compareProductIds.includes(productId) || state.compareProductIds.length >= 4) return state;
+    if (state.compareProductIds.includes(productId)) return state;
+    if (state.compareProductIds.length >= 4) return state;
     return { compareProductIds: [...state.compareProductIds, productId] };
   }),
 
@@ -225,25 +241,58 @@ export const useAppStore = create<AppState>((set, get) => ({
       return p;
     });
     const sourceIdSet = new Set(sourceIds);
-    const newFavorites = state.favorites.map(f => sourceIdSet.has(f.productId) ? { ...f, productId: targetId } : f);
-    const newCompareIds = state.compareProductIds.map(id => sourceIdSet.has(id) ? targetId : id);
-    const uniqueCompareIds = [...new Set(newCompareIds)];
+
+    // 收藏：productId 重映射 + 同 productId 多条合并为一条（保留最早加的那条）
+    const favMap = new Map<string, Favorite>();
+    state.favorites.forEach(f => {
+      const pid = sourceIdSet.has(f.productId) ? targetId : f.productId;
+      if (!favMap.has(pid)) favMap.set(pid, { ...f, productId: pid });
+    });
+    const newFavorites = Array.from(favMap.values());
+
+    // 对比：重映射并去重
+    const newCompareIds = [...new Set(state.compareProductIds.map(id => sourceIdSet.has(id) ? targetId : id))];
+
+    // 榜单：重映射并去重
     const newRankings = state.rankings.map(r => {
       const updated = r.productIds.map(id => sourceIdSet.has(id) ? targetId : id);
-      return { ...r, productIds: [...new Set(updated)] };
+      const seen = new Set<string>();
+      const deduped: string[] = [];
+      updated.forEach(id => {
+        if (!seen.has(id)) {
+          seen.add(id);
+          deduped.push(id);
+        }
+      });
+      return { ...r, productIds: deduped };
     });
+
     const newReviews = state.reviews.map(r => sourceIdSet.has(r.productId) ? { ...r, productId: targetId } : r);
     const newTrials = state.trials.map(t => sourceIdSet.has(t.productId) ? { ...t, productId: targetId } : t);
+
     saveToStorage('products', newProducts);
     saveToStorage('favorites', newFavorites);
     saveToStorage('rankings', newRankings);
     saveToStorage('reviews', newReviews);
     saveToStorage('trials', newTrials);
-    return { products: newProducts, favorites: newFavorites, compareProductIds: uniqueCompareIds, rankings: newRankings, reviews: newReviews, trials: newTrials };
+
+    // 合并后重算目标产品评分
+    setTimeout(() => {
+      const approved = newReviews.filter(r => r.productId === targetId && r.isApproved);
+      const totalRating = approved.reduce((sum, r) => sum + r.rating, 0);
+      const avgRating = approved.length > 0 ? Math.round((totalRating / approved.length) * 10) / 10 : 0;
+      const finalProducts = newProducts.map(p =>
+        p.id === targetId ? { ...p, rating: avgRating, reviewCount: approved.length, updatedAt: new Date().toISOString().split('T')[0] } : p
+      );
+      saveToStorage('products', finalProducts);
+      set({ products: finalProducts });
+    }, 0);
+
+    return { products: newProducts, favorites: newFavorites, compareProductIds: newCompareIds, rankings: newRankings, reviews: newReviews, trials: newTrials };
   }),
 
   addTrial: (trial) => set((state) => {
-    const newTrial: TrialApplication = { ...trial, id: `trial-${Date.now()}`, status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const newTrial: TrialApplication = { ...trial, id: `trial-${Date.now()}`, status: 'pending', followUps: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const newTrials = [...state.trials, newTrial];
     saveToStorage('trials', newTrials);
     return { trials: newTrials };
@@ -255,8 +304,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     return { trials: newTrials };
   }),
 
+  assignTrialOwner: (trialId, owner) => set((state) => {
+    const newTrials = state.trials.map(t => t.id === trialId ? { ...t, owner, updatedAt: new Date().toISOString() } : t);
+    saveToStorage('trials', newTrials);
+    return { trials: newTrials };
+  }),
+
+  addTrialFollowUp: (trialId, data) => set((state) => {
+    const newFollowUp: TrialFollowUp = { ...data, id: `fu-${Date.now()}`, trialId, createdAt: new Date().toISOString() };
+    const newTrials = state.trials.map(t =>
+      t.id === trialId
+        ? { ...t, followUps: [newFollowUp, ...t.followUps], updatedAt: new Date().toISOString() }
+        : t
+    );
+    saveToStorage('trials', newTrials);
+    return { trials: newTrials };
+  }),
+
+  updateTrialNextContact: (trialId, nextContactAt) => set((state) => {
+    const newTrials = state.trials.map(t => t.id === trialId ? { ...t, nextContactAt, updatedAt: new Date().toISOString() } : t);
+    saveToStorage('trials', newTrials);
+    return { trials: newTrials };
+  }),
+
   addRanking: (ranking) => set((state) => {
-    const newRanking: Ranking = { ...ranking, id: `rank-${Date.now()}` };
+    const newRanking: Ranking = { ...ranking, id: `rank-${Date.now()}`, status: ranking.status || 'draft' };
     const newRankings = [...state.rankings, newRanking];
     saveToStorage('rankings', newRankings);
     return { rankings: newRankings };
@@ -276,6 +348,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   reorderRankingProducts: (rankingId, productIds) => set((state) => {
     const newRankings = state.rankings.map(r => r.id === rankingId ? { ...r, productIds } : r);
+    saveToStorage('rankings', newRankings);
+    return { rankings: newRankings };
+  }),
+
+  publishRanking: (rankingId) => set((state) => {
+    const newRankings = state.rankings.map(r =>
+      r.id === rankingId ? { ...r, status: 'published' as const, publishedAt: new Date().toISOString() } : r
+    );
+    saveToStorage('rankings', newRankings);
+    return { rankings: newRankings };
+  }),
+
+  unpublishRanking: (rankingId) => set((state) => {
+    const newRankings = state.rankings.map(r => r.id === rankingId ? { ...r, status: 'draft' as const } : r);
     saveToStorage('rankings', newRankings);
     return { rankings: newRankings };
   }),
@@ -312,6 +398,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   getReviewsByProductId: (productId) => get().reviews.filter(r => r.productId === productId && r.isApproved).sort((a, b) => b.date.localeCompare(a.date)),
 
   getTrialsByProductId: (productId) => get().trials.filter(t => t.productId === productId),
+
+  getPublishedRankings: () => get().rankings.filter(r => r.status === 'published'),
 
   detectDuplicates: () => {
     const state = get();

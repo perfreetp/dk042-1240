@@ -63,6 +63,8 @@ export interface Ranking {
   category: string | 'all';
   type: 'rating' | 'popular' | 'new' | 'satisfaction';
   productIds: string[];
+  status: 'draft' | 'published';
+  publishedAt?: string;
 }
 
 export interface Favorite {
@@ -71,6 +73,15 @@ export interface Favorite {
   note?: string;
   groupName: string;
   addedAt: string;
+}
+
+export interface TrialFollowUp {
+  id: string;
+  trialId: string;
+  content: string;
+  createdAt: string;
+  operator: string;
+  result?: 'contacted' | 'scheduled' | 'converted' | 'lost';
 }
 
 export interface Filters {
@@ -113,8 +124,11 @@ export interface TrialApplication {
   note: string;
   status: TrialStatus;
   adminNote?: string;
+  owner?: string;
+  followUps: TrialFollowUp[];
+  nextContactAt?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export type AdminTab = 'products' | 'duplicates' | 'rankings' | 'reviews' | 'trials';
+export type AdminTab = 'dashboard' | 'products' | 'duplicates' | 'rankings' | 'reviews' | 'trials';
